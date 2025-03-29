@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neo Cafe - Chat</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+        }
+        
+        #chatframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+    </style>
+</head>
+<body>
+    <iframe id="chatframe" src="{{ chainlit_url }}" allowfullscreen></iframe>
+    
+    <script>
+        // Handle postMessage communication from the Chainlit iframe
+        window.addEventListener('message', function(event) {
+            // Verify the origin of the message
+            if (event.origin !== new URL("{{ chainlit_url }}").origin) {
+                return;
+            }
+            
+            // Handle different message types
+            if (event.data.type === 'orderPlaced') {
+                // Notify the parent window about an order being placed
+                window.parent.postMessage({
+                    type: 'orderPlaced',
+                    order: event.data.order
+                }, '*');
+            } else if (event.data.type === 'navigation') {
+                // Forward navigation requests to the parent window
+                window.parent.postMessage({
+                    type: 'navigation',
+                    destination: event.data.destination
+                }, '*');
+            } else if (event.data.type === 'chatMessage') {
+                // Forward chat messages to the parent window
+                window.parent.postMessage({
+                    type: 'chatMessage',
+                    message: event.data.message
+                }, '*');
+            }
+        });
+        
+        // Forward messages from the parent to the Chainlit iframe
+        window.addEventListener('message', function(event) {
+            // Only process messages from the parent
+            if (event.source === window.parent) {
+                const chatframe = document.getElementById('chatframe');
+                chatframe.contentWindow.postMessage(event.data, "{{ chainlit_url }}");
+            }
+        });
+    </script>
+</body>
+</html>

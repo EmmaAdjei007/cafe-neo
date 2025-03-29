@@ -1,0 +1,22 @@
+# Ignore Python virtual environment
+neoenv/
+.env
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+
+# Ignore log files and cache
+*.log
+logs/
+.cache/
+
+# Ignore IDE/editor-specific files
+.vscode/
+.idea/
+*.swp
+
+# Ignore dependency and build directories
+node_modules/
+dist/
+build/

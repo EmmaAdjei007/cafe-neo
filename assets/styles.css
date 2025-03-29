@@ -1,0 +1,254 @@
+/* Neo Cafe Theme - Coffee and Cream Unified Styles */
+:root {
+    /* Color Scheme */
+    --coffee-primary: #6F4E37;     /* Main coffee brown */
+    --coffee-secondary: #A67B5B;   /* Medium coffee */
+    --coffee-accent: #C8B6A6;      /* Light cream */
+    --coffee-light: #F3ECE7;       /* Off-white */
+    --coffee-dark: #2C1B0F;        /* Dark coffee */
+    --coffee-background: #FDF6E3;  /* Warm cream background */
+    --coffee-text: #3E2723;        /* Dark brown text */
+    --accent-red: #992800;         /* Terra cotta */
+    --accent-green: #5D8A64;       /* Sage green */
+    --accent-blue: #4682B4;        /* Denim blue */
+}
+
+/* Base Styles */
+body {
+    background-color: var(--coffee-background);
+    color: var(--coffee-text);
+    font-family: 'Poppins', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    line-height: 1.6;
+}
+
+/* Navbar */
+.navbar {
+    background-color: var(--coffee-primary) !important;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+}
+
+.navbar-brand {
+    font-family: 'Playfair Display', serif;
+    font-weight: 700;
+    color: var(--coffee-light) !important;
+    letter-spacing: 0.5px;
+}
+
+.nav-link {
+    color: var(--coffee-accent) !important;
+    font-weight: 500;
+    transition: all 0.3s ease;
+}
+
+.nav-link:hover {
+    color: var(--coffee-light) !important;
+    transform: translateY(-2px);
+}
+
+/* Cards */
+.card {
+    border: none;
+    border-radius: 10px;
+    box-shadow: 0 4px 12px rgba(111, 78, 55, 0.1);
+    background-color: var(--coffee-light);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 20px rgba(111, 78, 55, 0.2);
+}
+
+.card-title {
+    font-size: 1.2rem;
+    font-weight: bold;
+}
+
+.card-header {
+    background-color: var(--coffee-primary);
+    color: var(--coffee-light);
+    font-family: 'Playfair Display', serif;
+    border-bottom: 2px solid var(--coffee-accent);
+}
+
+/* Buttons */
+.btn-primary {
+    background-color: var(--coffee-primary) !important;
+    border-color: var(--coffee-primary) !important;
+    color: var(--coffee-light) !important;
+}
+
+.btn-primary:hover {
+    background-color: var(--coffee-dark) !important;
+    border-color: var(--coffee-dark) !important;
+}
+
+.btn-secondary {
+    background-color: var(--coffee-accent) !important;
+    border-color: var(--coffee-accent) !important;
+    color: var(--coffee-text) !important;
+}
+
+/* Menu Cards */
+.menu-card {
+    background-color: white;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 10px;
+    transition: transform 0.2s ease-in-out;
+    width: 300px;  /* Adjust width to fit nicely */
+}
+
+.menu-card .card-body {
+    padding: 10px;
+}
+
+.menu-card img {
+    width: 100%;
+    height: 200px;  /* Ensures uniform image size */
+    object-fit: cover;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+    border-bottom: 3px solid var(--coffee-accent);
+    
+}
+
+.menu-card:hover {
+    transform: scale(1.02);
+}
+
+.menu-card .card-title {
+    white-space: nowrap; /* Prevents text from wrapping to the next line */
+    overflow: hidden; /* Hides the overflow text */
+    text-overflow: ellipsis; /* Adds "..." when the text is too long */
+    max-width: 100%; /* Ensures it doesn't exceed the container width */
+    display: block;
+    font-family: 'Playfair Display', serif;
+    color: var(--coffee-primary);
+}
+
+.menu-card .price {
+    color: var(--coffee-secondary);
+    font-weight: 600;
+}
+
+/* Tables */
+.table {
+    background-color: white;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.table thead {
+    background-color: var(--coffee-primary);
+    color: var(--coffee-light);
+}
+
+.table-hover tbody tr:hover {
+    background-color: rgba(166, 123, 91, 0.1);
+}
+
+/* Footer */
+.footer {
+    background-color: var(--coffee-dark);
+    color: var(--coffee-accent);
+    padding: 2rem 0;
+    margin-top: 3rem;
+}
+
+.footer a {
+    color: var(--coffee-accent);
+    transition: color 0.3s ease;
+}
+
+.footer a:hover {
+    color: var(--coffee-light);
+}
+
+/* Typography */
+.section-title {
+    font-family: 'Playfair Display', serif;
+    color: var(--coffee-primary);
+    position: relative;
+    padding-bottom: 1rem;
+}
+
+.section-title:after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 120px;
+    height: 2px;
+    background-color: var(--coffee-secondary);
+}
+
+/* Animations */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in {
+    animation: fadeIn 0.5s ease-out;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .menu-card img {
+        height: 160px;
+    }
+    
+    .section-title {
+        font-size: 1.8rem;
+    }
+    
+    .navbar-brand {
+        font-size: 1.2rem;
+    }
+}
+
+/* Status Badges */
+.status-badge {
+    padding: 0.3rem 1rem;
+    border-radius: 20px;
+    font-size: 0.9rem;
+}
+
+.status-pending { background-color: #FFF3CD; color: #856404; }
+.status-preparing { background-color: #D1ECF1; color: #0C5460; }
+.status-ready { background-color: #D4EDDA; color: #155724; }
+
+/* Form Elements */
+.form-control:focus {
+    border-color: var(--coffee-secondary);
+    box-shadow: 0 0 0 0.25rem rgba(166, 123, 91, 0.25);
+}
+
+/* Chat Interface */
+.chat-message {
+    border-radius: 15px;
+    padding: 1rem;
+    margin: 1rem 0;
+    max-width: 80%;
+}
+
+.chat-message.user {
+    background-color: var(--coffee-light);
+    margin-left: auto;
+}
+
+.chat-message.assistant {
+    background-color: var(--coffee-primary);
+    color: white;
+}
+
+.d-flex {
+    display: flex;
+    justify-content: center;
+}

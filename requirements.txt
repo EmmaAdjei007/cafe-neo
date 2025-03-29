@@ -1,0 +1,19 @@
+# File: requirements.txt
+# Project dependencies for Neo Cafe
+
+dash
+dash-bootstrap-components
+plotly
+Flask
+Flask-SocketIO
+pandas
+numpy
+chainlit
+requests
+python-dotenv
+SpeechRecognition
+pyttsx3
+gunicorn
+gevent
+Werkzeug
+openai

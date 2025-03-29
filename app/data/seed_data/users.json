@@ -1,0 +1,72 @@
+[
+  {
+    "id": "1",
+    "username": "admin",
+    "email": "admin@neocafe.com",
+    "password_hash": "pbkdf2:sha256:150000$7eGnQMjS$d7b3725ee209e5d38a1da2cc13b23cd8c07fbcff1cb33a07b869a7267a841948",
+    "role": "admin",
+    "first_name": "Admin",
+    "last_name": "User",
+    "phone": "555-123-4567",
+    "created_at": "2023-01-01T00:00:00",
+    "last_login": "2025-03-24T08:30:00"
+  },
+  {
+    "id": "2",
+    "username": "staff",
+    "email": "staff@neocafe.com",
+    "password_hash": "pbkdf2:sha256:150000$uUNKLQkF$74f6a4b37cb8b13483e4d43dac1d0afbf316144825bd6261673e33ba32fbe0cd",
+    "role": "staff",
+    "first_name": "Staff",
+    "last_name": "Member",
+    "phone": "555-123-7890",
+    "created_at": "2023-01-02T00:00:00",
+    "last_login": "2025-03-23T14:45:00"
+  },
+  {
+    "id": "3",
+    "username": "customer",
+    "email": "customer@example.com",
+    "password_hash": "pbkdf2:sha256:150000$xLrFMwDT$83ee78fb47ec28dd0b54c6aea50c6e9a69eeff09d87a3e9e6f918f5f93a07c87",
+    "role": "customer",
+    "first_name": "John",
+    "last_name": "Smith",
+    "phone": "555-987-6543",
+    "created_at": "2023-01-03T00:00:00",
+    "last_login": "2025-03-24T10:15:00"
+  },
+  {
+    "id": "4",
+    "username": "barista",
+    "email": "barista@neocafe.com",
+    "password_hash": "pbkdf2:sha256:150000$MnGHsrPz$bb9ffb6522a1b49ede35a7d2749e7f1d442da3fca2b7e1c7fbc08f906ba46f7a",
+    "role": "staff",
+    "first_name": "Sarah",
+    "last_name": "Jones",
+    "phone": "555-456-7890",
+    "created_at": "2023-02-01T00:00:00",
+    "last_login": "2025-03-24T07:30:00"
+  },
+  {
+    "id": "5",
+    "username": "manager",
+    "email": "manager@neocafe.com",
+    "password_hash": "pbkdf2:sha256:150000$TnJvmRS2$dc7e562850173c92b8c82f8d6bafaf07591cb51ac3dd83e492c76e9097916a8c",
+    "role": "admin",
+    "first_name": "Michael",
+    "last_name": "Johnson",
+    "phone": "555-789-1234",
+    "created_at": "2023-02-15T00:00:00",
+    "last_login": "2025-03-23T16:20:00"
+  },
+  {
+    "username": "Emmanuel",
+    "email": "eaadjei@andrew.cmu.edu",
+    "password_hash": "pbkdf2:sha256:150000$9d9d8e0a23d2a8a1$d50444352258549d715137c743cd2a5aa7a2f869f70ece3945462e236333251e",
+    "role": "customer",
+    "created_at": "2025-03-27T23:00:31.157323",
+    "id": "1743109231",
+    "last_login": "2025-03-29T12:18:16.917858",
+    "updated_at": "2025-03-29T12:18:16.920386"
+  }
+]
