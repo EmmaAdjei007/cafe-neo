@@ -1,6 +1,6 @@
 # File: app/callbacks/delivery_callbacks.py
 
-from dash import Input, Output, State,html, callback_context
+from dash import Input, Output, State, html, callback_context, ALL  # Add ALL import
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 import pandas as pd

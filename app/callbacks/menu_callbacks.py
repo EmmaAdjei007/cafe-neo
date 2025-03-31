@@ -1,6 +1,6 @@
 # File: app/callbacks/menu_callbacks.py
 
-from dash import Input, Output, State, callback_context, html, dcc
+from dash import Input, Output, State, callback_context, html, dcc, ALL
 import dash_bootstrap_components as dbc
 import json
 import pandas as pd
@@ -248,30 +248,35 @@ def register_callbacks(app):
         [
             Output("item-details-modal", "is_open"),
             Output("item-details-modal-body", "children"),
+            Output("quantity-container", "style"),
             Output("selected-item-store", "data")
         ],
         [
-            Input({"type": "item-details-btn", "index": "all"}, "n_clicks"),
+            Input({"type": "item-details-btn", "index": ALL}, "n_clicks"),
             Input("close-item-modal", "n_clicks")
         ],
         [
-            State({"type": "item-details-btn", "index": "all"}, "id"),
+            State({"type": "item-details-btn", "index": ALL}, "id"),
             State("menu-data-store", "data"),
             State("item-details-modal", "is_open")
-        ]
+        ],
+        prevent_initial_call=True
     )
     def toggle_item_modal(n_clicks_list, close_clicks, btn_ids, menu_data, is_open):
         """Toggle the item details modal and show selected item details"""
         ctx = callback_context
         
+        # Default return values - modal closed, empty content, hidden quantity input, no selected item
+        hidden_style = {"display": "none"}
+        
         # Default return if no button clicked
         if not ctx.triggered or not btn_ids:
-            return False, None, None
+            return False, None, hidden_style, None
         
         # Check if close button was clicked
         button_id = ctx.triggered[0]["prop_id"].split(".")[0]
         if button_id == "close-item-modal":
-            return False, None, None
+            return False, None, hidden_style, None
         
         # Find which item button was clicked
         for i, n_clicks in enumerate(n_clicks_list):
@@ -283,62 +288,50 @@ def register_callbacks(app):
                 
                 if item:
                     # Create modal content
-                    modal_content = [
-                        dbc.Row([
-                            dbc.Col([
-                                html.Img(
-                                    src=item.get("image", "/assets/images/menu-items/default.jpg"),
-                                    className="img-fluid rounded",
-                                    style={"width": "100%"}
-                                )
-                            ], md=6),
-                            dbc.Col([
-                                html.H3(item["name"], className="mb-3"),
-                                html.P(item["description"], className="mb-3"),
-                                html.H5(f"Price: ${item['price']:.2f}", className="mb-3"),
-                                html.Div([
-                                    dbc.Badge("Vegetarian", color="success", className="me-2") if item.get("vegetarian") else None,
-                                    dbc.Badge("Vegan", color="success", className="me-2") if item.get("vegan") else None,
-                                    dbc.Badge("Gluten-Free", color="warning", className="me-2") if item.get("gluten_free") else None,
-                                    dbc.Badge("Popular", color="primary", className="me-2") if item.get("popular") else None
-                                ], className="mb-4"),
-                                dbc.InputGroup([
-                                    dbc.InputGroupText("Quantity"),
-                                    dbc.Input(
-                                        id="item-quantity",
-                                        type="number",
-                                        min=1,
-                                        max=10,
-                                        value=1
-                                    ),
-                                    dbc.Button(
-                                        "Add to Order",
-                                        id="modal-add-to-cart",
-                                        color="primary"
-                                    )
-                                ])
-                            ], md=6)
-                        ])
-                    ]
+                    modal_content = dbc.Row([
+                        dbc.Col([
+                            html.Img(
+                                src=item.get("image", "/assets/images/menu-items/default.jpg"),
+                                className="img-fluid rounded",
+                                style={"width": "100%"}
+                            )
+                        ], md=6),
+                        dbc.Col([
+                            html.H3(item["name"], className="mb-3"),
+                            html.P(item["description"], className="mb-3"),
+                            html.H5(f"Price: ${item['price']:.2f}", className="mb-3"),
+                            html.Div([
+                                dbc.Badge("Vegetarian", color="success", className="me-2") if item.get("vegetarian") else None,
+                                dbc.Badge("Vegan", color="success", className="me-2") if item.get("vegan") else None,
+                                dbc.Badge("Gluten-Free", color="warning", className="me-2") if item.get("gluten_free") else None,
+                                dbc.Badge("Popular", color="primary", className="me-2") if item.get("popular") else None
+                            ], className="mb-4")
+                        ], md=6)
+                    ])
                     
-                    return True, modal_content, item
+                    # Show the quantity input by setting its display style
+                    quantity_style = {"display": "block", "marginTop": "20px"}
+                    
+                    # Return: modal open, content, show quantity input, selected item
+                    return True, modal_content, quantity_style, item
         
         # If no matching button found
-        return is_open, None, None
+        return is_open, None, hidden_style, None
     
     @app.callback(
         Output("cart-store", "data"),
         [
-            Input({"type": "add-to-cart-btn", "index": "all"}, "n_clicks"),
+            Input({"type": "add-to-cart-btn", "index": ALL}, "n_clicks"),
             Input("modal-add-to-cart", "n_clicks")
         ],
         [
-            State({"type": "add-to-cart-btn", "index": "all"}, "id"),
+            State({"type": "add-to-cart-btn", "index": ALL}, "id"),
             State("menu-data-store", "data"),
             State("selected-item-store", "data"),
             State("item-quantity", "value"),
             State("cart-store", "data")
-        ]
+        ],
+        prevent_initial_call=True
     )
     def add_to_cart(n_clicks_list, modal_clicks, btn_ids, menu_data, selected_item, quantity, current_cart):
         """Add items to the cart"""

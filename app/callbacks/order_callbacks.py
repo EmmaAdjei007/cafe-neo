@@ -1,6 +1,6 @@
 # File: app/callbacks/order_callbacks.py
 
-from dash import Input, Output, State, callback_context, html
+from dash import Input, Output, State, callback_context, html, ALL  # Add ALL import
 import dash_bootstrap_components as dbc
 import json
 import time
@@ -206,13 +206,14 @@ def register_callbacks(app, socketio):
     @app.callback(
         Output("order-status-store", "data"),
         [
-            Input({"type": "status-change-btn", "index": "all"}, "n_clicks"),
+            Input({"type": "status-change-btn", "index": ALL}, "n_clicks"),  # Changed "all" to ALL
             Input("socket-order-update", "children")  # Hidden div updated by SocketIO
         ],
         [
-            State({"type": "status-change-btn", "index": "all"}, "id"),
+            State({"type": "status-change-btn", "index": ALL}, "id"),  # Changed "all" to ALL
             State("order-status-store", "data")
-        ]
+        ],
+        prevent_initial_call=True  # Added to prevent initial callback
     )
     def update_order_status_callback(n_clicks_list, socket_update, btn_ids, current_status):
         """Update order status when a status change button is clicked"""

@@ -76,6 +76,22 @@ def layout():
         className="mb-4"
     )
     
+    # Modal content area (doesn't include the quantity input)
+    modal_body = html.Div(id="item-details-modal-body")
+    
+    # Quantity input (always in the layout but can be hidden)
+    # Using div instead of FormGroup (which is deprecated)
+    quantity_input = html.Div([
+        dbc.Label("Quantity:", html_for="item-quantity"),
+        dbc.Input(
+            id="item-quantity",
+            type="number",
+            min=1,
+            max=10,
+            value=1
+        )
+    ], id="quantity-container", style={"marginTop": "20px"})
+    
     # Combine all elements
     layout = html.Div([
         header,
@@ -87,10 +103,11 @@ def layout():
         dbc.Modal(
             [
                 dbc.ModalHeader(dbc.ModalTitle("Item Details"), close_button=True),
-                dbc.ModalBody(id="item-details-modal-body"),
-                dbc.ModalFooter(
+                dbc.ModalBody([modal_body, quantity_input]),
+                dbc.ModalFooter([
+                    dbc.Button("Add to Order", id="modal-add-to-cart", color="primary", className="me-2"),
                     dbc.Button("Close", id="close-item-modal", className="ms-auto", n_clicks=0)
-                ),
+                ]),
             ],
             id="item-details-modal",
             size="lg",
