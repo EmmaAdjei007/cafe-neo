@@ -7,6 +7,7 @@ from app.components.modals import order_details_modal, confirm_order_modal, orde
 from app.components.tables import create_order_items_table
 
 
+
 def layout():
     """
     Create the orders page layout

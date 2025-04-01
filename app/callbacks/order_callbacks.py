@@ -260,3 +260,51 @@ def register_callbacks(app, socketio):
         
         # Acknowledge receipt
         return {"status": "success", "message": "Order received"}
+    
+    @app.callback(
+        [
+            Output("cart-items-container", "children"),
+            Output("empty-cart-alert", "is_open"),
+            Output("cart-subtotal", "children"),
+            Output("cart-tax", "children"),
+            Output("cart-total", "children"),
+            Output("checkout-btn", "disabled")
+        ],
+        [Input("cart-store", "data")]
+    )
+    def update_cart_display(cart_data):
+        """Update the cart display with items from cart-store"""
+        
+        # Default values when cart is empty
+        if not cart_data or len(cart_data) == 0:
+            return (
+                None,
+                True,  # Show empty cart alert
+                "$0.00",
+                "$0.00",
+                "$0.00",
+                True  # Disable checkout button
+            )
+        
+        # Create table of items
+        from app.components.tables import create_order_items_table
+        items_table = create_order_items_table(cart_data)
+        
+        # Calculate totals
+        subtotal = sum(item.get("price", 0) * item.get("quantity", 1) for item in cart_data)
+        tax = subtotal * 0.08  # Assuming 8% tax
+        total = subtotal + tax
+        
+        # Format currency values
+        subtotal_formatted = f"${subtotal:.2f}"
+        tax_formatted = f"${tax:.2f}"
+        total_formatted = f"${total:.2f}"
+        
+        return (
+            items_table,
+            False,  # Hide empty cart alert
+            subtotal_formatted,
+            tax_formatted,
+            total_formatted,
+            False  # Enable checkout button
+        )

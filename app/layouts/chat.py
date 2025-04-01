@@ -32,8 +32,10 @@ def layout():
                             "width": "100%",
                             "height": "600px",
                             "border": "none",
-                            "borderRadius": "0.25rem"
-                        }
+                            "borderRadius": "0.25rem", 
+                            "backgroundColor": "#f8f9fa"
+                        },
+                        allow="microphone"
                     )
                 ]),
                 dbc.CardFooter([
