@@ -342,6 +342,84 @@ def create_inventory_table(items=None):
     
     return table
 
+# def create_order_items_table(items=None):
+#     """
+#     Create a table of items within an order
+    
+#     Args:
+#         items (list, optional): List of order items
+        
+#     Returns:
+#         dbc.Table: The table component
+#     """
+#     # Define table headers
+#     headers = ["Item", "Price", "Quantity", "Subtotal", "Actions"]
+    
+#     # Create table header
+#     header = html.Thead(html.Tr([html.Th(h) for h in headers]))
+    
+#     # Create table body
+#     if not items:
+#         body = html.Tbody(html.Tr(html.Td("No items in order", colSpan=len(headers), className="text-center")))
+#     else:
+#         rows = []
+#         for item in items:
+#             # Calculate subtotal
+#             price = item.get("price", 0)
+#             quantity = item.get("quantity", 1)
+#             subtotal = price * quantity
+            
+#             # Create action buttons
+#             action_buttons = html.Div([
+#                 dbc.Button(
+#                     html.I(className="fas fa-minus"),
+#                     id={"type": "decrease-item-btn", "index": item.get("id", "")},
+#                     color="secondary",
+#                     size="sm",
+#                     className="me-1"
+#                 ),
+#                 dbc.Button(
+#                     html.I(className="fas fa-plus"),
+#                     id={"type": "increase-item-btn", "index": item.get("id", "")},
+#                     color="secondary",
+#                     size="sm",
+#                     className="me-1"
+#                 ),
+#                 dbc.Button(
+#                     html.I(className="fas fa-trash"),
+#                     id={"type": "remove-item-btn", "index": item.get("id", "")},
+#                     color="danger",
+#                     size="sm"
+#                 )
+#             ], className="d-flex justify-content-center")
+            
+#             # Create the table row
+#             row = html.Tr([
+#                 html.Td(item.get("name", "")),
+#                 html.Td(f"${price:.2f}"),
+#                 html.Td(quantity),
+#                 html.Td(f"${subtotal:.2f}"),
+#                 html.Td(action_buttons)
+#             ])
+            
+#             rows.append(row)
+        
+#         body = html.Tbody(rows)
+    
+#     # Create the table
+#     table = dbc.Table(
+#         [header, body],
+#         className="order-items-table",
+#         bordered=True,
+#         hover=True,
+#         responsive=True,
+#         striped=True
+#     )
+    
+#     return table
+
+#=================================================
+
 def create_order_items_table(items=None):
     """
     Create a table of items within an order
@@ -352,6 +430,9 @@ def create_order_items_table(items=None):
     Returns:
         dbc.Table: The table component
     """
+    import dash_bootstrap_components as dbc
+    from dash import html
+    
     # Define table headers
     headers = ["Item", "Price", "Quantity", "Subtotal", "Actions"]
     
@@ -363,31 +444,35 @@ def create_order_items_table(items=None):
         body = html.Tbody(html.Tr(html.Td("No items in order", colSpan=len(headers), className="text-center")))
     else:
         rows = []
-        for item in items:
-            # Calculate subtotal
+        for i, item in enumerate(items):
+            # Get item values with defaults
+            name = item.get("name", "")
             price = item.get("price", 0)
             quantity = item.get("quantity", 1)
+            item_id = item.get("id", i)  # Use index as fallback ID
+            
+            # Calculate subtotal
             subtotal = price * quantity
             
             # Create action buttons
             action_buttons = html.Div([
                 dbc.Button(
                     html.I(className="fas fa-minus"),
-                    id={"type": "decrease-item-btn", "index": item.get("id", "")},
+                    id={"type": "decrease-item-btn", "index": item_id},
                     color="secondary",
                     size="sm",
                     className="me-1"
                 ),
                 dbc.Button(
                     html.I(className="fas fa-plus"),
-                    id={"type": "increase-item-btn", "index": item.get("id", "")},
+                    id={"type": "increase-item-btn", "index": item_id},
                     color="secondary",
                     size="sm",
                     className="me-1"
                 ),
                 dbc.Button(
                     html.I(className="fas fa-trash"),
-                    id={"type": "remove-item-btn", "index": item.get("id", "")},
+                    id={"type": "remove-item-btn", "index": item_id},
                     color="danger",
                     size="sm"
                 )
@@ -395,7 +480,7 @@ def create_order_items_table(items=None):
             
             # Create the table row
             row = html.Tr([
-                html.Td(item.get("name", "")),
+                html.Td(name),
                 html.Td(f"${price:.2f}"),
                 html.Td(quantity),
                 html.Td(f"${subtotal:.2f}"),

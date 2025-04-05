@@ -86,10 +86,6 @@ def configure_server(server, socketio):
         except Exception as e:
             return jsonify({'status': 'error', 'message': str(e)}), 500
         
-    # File: app/server.py (Updated with Client-Side Callback)
-
-# Add this to your server.py file or where you set up Flask routes
-
     @server.route('/chainlit')
     def chainlit_proxy():
         """Proxy page that embeds the Chainlit app in an iframe"""
