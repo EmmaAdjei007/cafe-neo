@@ -21,7 +21,7 @@ def run_chainlit():
     """Run the Chainlit application"""
     print("Starting Chainlit application...")
     os.chdir("chainlit_app")
-    chainlit_process = subprocess.Popen(["chainlit", "run", "app.py", "--port", "8001"])
+    chainlit_process = subprocess.Popen(["chainlit", "run", "app.py", "--port", "8000"])
     os.chdir("..")
     return chainlit_process
 
@@ -49,7 +49,7 @@ def main():
     # Wait for processes to complete (they won't unless terminated)
     print("\nBoth applications are running!")
     print("Visit http://localhost:8050 for the Dash app")
-    print("Visit http://localhost:8001 for the Chainlit app directly")
+    print("Visit http://localhost:8000 for the Chainlit app directly")
     print("\nPress Ctrl+C to stop both applications")
     
     try:

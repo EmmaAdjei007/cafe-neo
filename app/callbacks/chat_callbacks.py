@@ -10,7 +10,9 @@ import requests
 from app.utils.api_utils import send_message_to_chainlit, get_chainlit_session
 
 # Base URLs for APIs
-CHAINLIT_URL = os.environ.get('CHAINLIT_URL', 'http://localhost:8001')
+CHAINLIT_URL = os.environ.get('CHAINLIT_URL', 'http://localhost:8000')
+DASHBOARD_URL = os.environ.get('DASHBOARD_URL', 'http://localhost:8050')  # Add this line
+
 
 def register_callbacks(app, socketio):
     """
@@ -20,6 +22,83 @@ def register_callbacks(app, socketio):
         app: Dash application instance
         socketio: SocketIO instance for real-time communication
     """
+
+    @app.callback(
+    Output("hours-collapse", "is_open"),
+    [Input("fallback-hours-btn", "n_clicks")],
+    [State("hours-collapse", "is_open")]
+)
+    def toggle_hours_collapse(n_clicks, is_open):
+        """Toggle the hours collapse section"""
+        if n_clicks:
+            return not is_open
+        return is_open
+
+    @app.callback(
+        [
+            Output("chainlit-container", "style"),
+            Output("react-chat-container", "style"),
+            Output("simple-fallback-container", "style")
+        ],
+        [Input("chat-implementation-toggle", "value")]
+    )
+    def toggle_chat_implementation(use_fallback):
+        """Toggle between Chainlit iframe and fallback implementations"""
+        if use_fallback:
+            try:
+                # Check if we can create the React implementation
+                from dash_extensions import WebLink
+                # Use React implementation
+                return {"display": "none"}, {"display": "block", "height": "600px"}, {"display": "none"}
+            except ImportError:
+                # If dash_extensions is not available, use the simple fallback
+                return {"display": "none"}, {"display": "none"}, {"display": "block"}
+        else:
+            # Use Chainlit iframe
+            return {"display": "block"}, {"display": "none"}, {"display": "none"}
+   
+    @app.callback(
+    [Output("chainlit-loading-indicator", "children"),
+     Output("chainlit-error", "children"),
+     Output("chainlit-error", "style")],
+    [Input("chainlit-status-check", "n_intervals")]
+)
+    def check_chainlit_status(n_intervals):
+        """Check if Chainlit is accessible"""
+        if n_intervals is None or n_intervals == 0:
+            # Initial load, show nothing
+            return None, None, {"display": "none"}
+        
+        try:
+            # Make a request to our own status endpoint or directly to Chainlit
+            try:
+                # Try to access our own endpoint first
+                response = requests.get(f"/chainlit-status", timeout=2)
+            except:
+                # If that fails, try to directly access Chainlit
+                response = requests.get(f"{CHAINLIT_URL}/health", timeout=2)
+            
+            if response.status_code == 200:
+                # All good, hide everything
+                return None, None, {"display": "none"}
+            else:
+                # Error response from our endpoint
+                error_msg = f"Chainlit service is not responding properly. Status: {response.json().get('message', 'Unknown error')}"
+                return None, html.Div([
+                    html.H5("Connection Issue", className="text-danger"),
+                    html.P(error_msg),
+                    html.P("Please try refreshing the page or contact support.")
+                ]), {"display": "block", "margin": "20px", "padding": "20px", "border": "1px solid #dc3545", "borderRadius": "5px"}
+        
+        except Exception as e:
+            # Request failed
+            error_msg = f"Could not connect to Chainlit service: {str(e)}"
+            return None, html.Div([
+                html.H5("Connection Issue", className="text-danger"),
+                html.P(error_msg),
+                html.P("Please ensure the Chainlit service is running and try again.")
+            ]), {"display": "block", "margin": "20px", "padding": "20px", "border": "1px solid #dc3545", "borderRadius": "5px"}
+
     @app.callback(
         Output('chat-action-trigger', 'children'),
         [

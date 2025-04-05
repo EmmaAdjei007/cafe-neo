@@ -7,6 +7,8 @@ import dash_bootstrap_components as dbc
 from flask import Flask
 from flask_socketio import SocketIO
 from dotenv import load_dotenv
+from server import configure_server
+
 
 # Load environment variables
 load_dotenv()
@@ -20,7 +22,7 @@ from app.callbacks import register_all_callbacks
 from app.config import config
 
 # Get Chainlit URL from environment variables or use default
-CHAINLIT_URL = os.environ.get('CHAINLIT_URL', 'http://localhost:8001')
+CHAINLIT_URL = os.environ.get('CHAINLIT_URL', 'http://localhost:8000')
 
 # Initialize Flask and SocketIO
 server = Flask(__name__, 
@@ -28,6 +30,9 @@ server = Flask(__name__,
                static_url_path='/assets')
 server.secret_key = os.environ.get('FLASK_SECRET_KEY', config['flask_secret_key'])
 socketio = SocketIO(server, cors_allowed_origins="*")
+
+# Register custom routes for chainlit integration
+configure_server(server, socketio)
 
 # Initialize Dash with a coffee-themed bootstrap
 app = Dash(__name__, 

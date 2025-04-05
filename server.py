@@ -20,7 +20,7 @@ def configure_server(server, socketio):
     @server.route('/chainlit')
     def chainlit_proxy():
         """Proxy page that embeds the Chainlit app in an iframe"""
-        chainlit_url = os.environ.get('CHAINLIT_URL', 'http://localhost:8001')
+        chainlit_url = os.environ.get('CHAINLIT_URL', 'http://localhost:8000')
         
         # Create a session ID if one doesn't exist
         if 'session_id' not in session:
@@ -85,19 +85,17 @@ def configure_server(server, socketio):
         
         except Exception as e:
             return jsonify({'status': 'error', 'message': str(e)}), 500
-        
-    @server.route('/chainlit')
-    def chainlit_proxy():
-        """Proxy page that embeds the Chainlit app in an iframe"""
-        chainlit_url = os.environ.get('CHAINLIT_URL', 'http://localhost:8001')
-        
-        # Create a session ID if one doesn't exist
-        if 'session_id' not in session:
-            session['session_id'] = str(uuid.uuid4())
-        
-        # Pass along any query parameters
-        query_string = request.query_string.decode('utf-8')
-        if query_string:
-            chainlit_url = f"{chainlit_url}?{query_string}"
-        
-        return render_template('chainlit_embed.html', chainlit_url=chainlit_url)
+
+    # Add a simple health check route
+    @server.route('/chainlit-status')
+    def chainlit_status():
+        """Check if Chainlit is running"""
+        chainlit_url = os.environ.get('CHAINLIT_URL', 'http://localhost:8000')
+        try:
+            response = requests.get(f"{chainlit_url}/health", timeout=2)
+            if response.status_code == 200:
+                return jsonify({"status": "ok"})
+            else:
+                return jsonify({"status": "error", "message": f"Chainlit returned status code {response.status_code}"}), 503
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 503
