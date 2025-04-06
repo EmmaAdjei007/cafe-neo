@@ -1,4 +1,4 @@
-# File: app/components/navbar.py
+# File: app/layouts/navbar.py
 
 import dash_bootstrap_components as dbc
 from dash import html
@@ -36,7 +36,7 @@ def create_navbar():
                             dbc.NavItem(dbc.NavLink("Menu", href="/menu", id="menu-link")),
                             dbc.NavItem(dbc.NavLink("Orders", href="/orders", id="orders-link")),
                             dbc.NavItem(dbc.NavLink("Delivery", href="/delivery", id="delivery-link")),
-                            dbc.NavItem(dbc.NavLink("Chat", href="/chat", id="chat-link")),
+                            # Chat link removed, as it's now floating
                             
                             # Auth buttons - show conditionally based on login state
                             html.Div([

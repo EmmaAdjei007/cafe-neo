@@ -1,9 +1,9 @@
-# # File: app/layouts/__init__.py
-from dash import html, dcc, Input, Output
+# File: app/layouts/__init__.py (Updated)
+from dash import Input, Output, html, dcc, clientside_callback, ClientsideFunction
 from app.layouts.navbar import create_navbar
 from app.layouts.footer import create_footer
-from app.components.modals import login_modal, signup_modal , signup_success_modal # Import the modals
-from dash import html, dcc, clientside_callback, ClientsideFunction
+from app.components.modals import login_modal, signup_modal, signup_success_modal
+from app.components.floating_chat import create_floating_chat
 
 
 def create_main_layout():
@@ -19,7 +19,8 @@ def create_main_layout():
         dcc.Store(id='cart-store', storage_type='session', data=[]),
         dcc.Store(id='active-tab-store', storage_type='session'),
         dcc.Store(id='delivery-update-store', storage_type='memory'),
-        dcc.Store(id='auth-store', storage_type='session')  # Add auth store
+        dcc.Store(id='auth-store', storage_type='session'),
+        dcc.Store(id='chat-state-store', storage_type='session'),  # Add chat state
     ]
 
     # Define an interval for periodic updates
@@ -36,6 +37,9 @@ def create_main_layout():
         )
     ]
 
+    # Create the floating chat component
+    floating_chat = create_floating_chat()
+
     # Create the main layout with routing
     layout = html.Div([
         dcc.Location(id='url', refresh=False),
@@ -46,6 +50,9 @@ def create_main_layout():
         html.Div(id='alert-container'),
         html.Div(id='cart-alert'),
         
+        # Add floating chat component
+        floating_chat,
+        
         # Add auth modals
         login_modal(),
         signup_modal(),
@@ -53,6 +60,11 @@ def create_main_layout():
         
         # Add the hidden auth-check div
         html.Div(id="auth-check", style={"display": "none"}),
+        
+        # Add hidden divs for chat communication
+        html.Div(id='chat-message-listener', style={'display': 'none'}),
+        html.Div(id='chat-action-trigger', style={'display': 'none'}),
+        html.Div(id='socket-chat-update', style={'display': 'none'}),
         
         # Add stores and intervals
         *stores,

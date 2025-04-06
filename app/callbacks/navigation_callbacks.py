@@ -1,4 +1,4 @@
-# File: app/callbacks/navigation_callbacks.py
+# File: app/callbacks/navigation_callbacks.py (Updated)
 import dash
 from dash import Input, Output, State, callback_context, dcc, html
 import dash_bootstrap_components as dbc
@@ -14,19 +14,23 @@ def register_callbacks(app):
         [
             Output('page-content', 'children'),
             Output('tab-content', 'children'),
-            Output('active-tab-store', 'data')
+            Output('active-tab-store', 'data'),
+            Output('floating-chat-panel', 'style', allow_duplicate=True)  # Added to control chat visibility
         ],
         [Input('url', 'pathname')],
-        [State('active-tab-store', 'data')]
+        [
+            State('active-tab-store', 'data'),
+            State('floating-chat-panel', 'style')
+        ],
+        prevent_initial_call=True
     )
-    def display_page(pathname, active_tab):
+    def display_page(pathname, active_tab, chat_style):
         """Route to the appropriate page based on URL pathname"""
         from app.layouts.landing import layout as landing_layout
         from app.layouts.dashboard import layout as dashboard_layout
         from app.layouts.menu import layout as menu_layout
         from app.layouts.orders import layout as orders_layout
         from app.layouts.delivery import layout as delivery_layout
-        from app.layouts.chat import layout as chat_layout
         from app.layouts.auth import login_layout, signup_layout
         from app.layouts.profile import layout as profile_layout
         
@@ -37,40 +41,46 @@ def register_callbacks(app):
         # Empty tab content by default
         tab_content = html.Div()
         
+        # Default chat panel style (no change)
+        new_chat_style = dash.no_update
+        
+        # Check if user is trying to navigate to the chat page
+        if pathname == '/chat':
+            # Redirect to dashboard instead and open the chat panel
+            pathname = '/dashboard'
+            new_chat_style = {"display": "flex"}  # Show the chat panel
+        
         # Check the pathname and return the appropriate layout
         if pathname == '/' or pathname == '/landing':
-            return landing_layout(), tab_content, active_tab
+            return landing_layout(), tab_content, active_tab, new_chat_style
         
         elif pathname == '/dashboard':
-            return dashboard_layout(), tab_content, 'dashboard'
+            return dashboard_layout(), tab_content, 'dashboard', new_chat_style
         
         elif pathname == '/menu':
-            return menu_layout(), tab_content, 'menu'
+            return menu_layout(), tab_content, 'menu', new_chat_style
         
         elif pathname == '/orders':
-            return orders_layout(), tab_content, 'orders'
+            return orders_layout(), tab_content, 'orders', new_chat_style
         
         elif pathname == '/delivery':
-            return delivery_layout(), tab_content, 'delivery'
-        
-        elif pathname == '/chat':
-            return chat_layout(), tab_content, 'chat'
+            return delivery_layout(), tab_content, 'delivery', new_chat_style
         
         elif pathname == '/login':
-            return login_layout(), tab_content, active_tab
+            return login_layout(), tab_content, active_tab, new_chat_style
         
         elif pathname == '/signup':
-            return signup_layout(), tab_content, active_tab
+            return signup_layout(), tab_content, active_tab, new_chat_style
         
         elif pathname == '/profile':
-            return profile_layout(), tab_content, active_tab
+            return profile_layout(), tab_content, active_tab, new_chat_style
         
         # If the pathname isn't recognized, return a 404 message
         return html.Div([
             html.H1('404 - Page Not Found', className='text-danger'),
             html.P('The page you requested does not exist.'),
             dbc.Button('Return Home', href='/', color='primary')
-        ]), tab_content, active_tab
+        ]), tab_content, active_tab, new_chat_style
     
     @app.callback(
         Output('navbar-collapse', 'is_open'),
@@ -84,7 +94,7 @@ def register_callbacks(app):
         return is_open
     
     @app.callback(
-        [Output(f"{page}-link", "active") for page in ["dashboard", "menu", "orders", "delivery", "chat"]],
+        [Output(f"{page}-link", "active") for page in ["dashboard", "menu", "orders", "delivery"]],  # Removed chat
         [Input("url", "pathname")]
     )
     def set_active_link(pathname):
@@ -94,16 +104,16 @@ def register_callbacks(app):
             "/dashboard": "dashboard",
             "/menu": "menu",
             "/orders": "orders",
-            "/delivery": "delivery",
-            "/chat": "chat"
+            "/delivery": "delivery"
         }
         
         # Get the current page from the pathname
         current_page = path_map.get(pathname, None)
         
         # Set active state for each link
-        return [page == current_page for page in ["dashboard", "menu", "orders", "delivery", "chat"]]
+        return [page == current_page for page in ["dashboard", "menu", "orders", "delivery"]]
     
+    # Authentication/URL callbacks are unchanged from here...
     @app.callback(
     [
         Output("login-modal", "is_open"),
