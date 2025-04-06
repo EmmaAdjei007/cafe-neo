@@ -47,7 +47,6 @@ def register_callbacks(app, socketio):
         if use_fallback:
             try:
                 # Check if we can create the React implementation
-                from dash_extensions import WebLink
                 # Use React implementation
                 return {"display": "none"}, {"display": "block", "height": "600px"}, {"display": "none"}
             except ImportError:

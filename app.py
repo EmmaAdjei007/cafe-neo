@@ -1,5 +1,4 @@
 # File: app.py (Main Application Entry Point)
-
 import sys
 import os
 from dash import Dash, dcc, html
@@ -8,6 +7,8 @@ from flask import Flask
 from flask_socketio import SocketIO
 from dotenv import load_dotenv
 from server import configure_server
+
+
 
 
 # Load environment variables
@@ -21,8 +22,11 @@ from app.layouts import create_main_layout
 from app.callbacks import register_all_callbacks
 from app.config import config
 
+
+
 # Get Chainlit URL from environment variables or use default
 CHAINLIT_URL = os.environ.get('CHAINLIT_URL', 'http://localhost:8000')
+
 
 # Initialize Flask and SocketIO
 server = Flask(__name__, 

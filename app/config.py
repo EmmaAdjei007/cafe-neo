@@ -21,7 +21,7 @@ config = {
     'special_offer': 'Buy one coffee, get a pastry at half price',
     
     # API URLs
-    "chainlit_url": os.environ.get('CHAINLIT_URL', 'http://localhost:8001'),
+    "chainlit_url": os.environ.get('CHAINLIT_URL', 'http://localhost:8000'),
     "robot_simulator_url": os.environ.get('ROBOT_SIMULATOR_URL', 'http://localhost:8051'),
     
     # Database settings

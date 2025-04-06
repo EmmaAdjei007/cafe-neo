@@ -88,52 +88,6 @@ def confirm_order_modal():
     
     return modal
 
-#========================================================
-# def confirm_order_modal():
-#     """
-#     Create a confirm order modal
-    
-#     Returns:
-#         dbc.Modal: The modal component
-#     """
-#     modal = dbc.Modal(
-#         [
-#             dbc.ModalHeader(dbc.ModalTitle("Confirm Your Order"), close_button=True),
-#             dbc.ModalBody([
-#                 html.P("Please review your order before confirming:"),
-#                 html.Div(id="confirm-order-details"),
-#                 html.Hr(),
-#                 html.P(id="confirm-order-total", className="fw-bold"),
-#                 # Removed FormGroup wrapper
-#                 dbc.Label("Special Instructions:"),
-#                 dbc.Textarea(
-#                     id="confirm-order-instructions",
-#                     placeholder="Any special instructions for your order?",
-#                     className="mb-3",
-#                     style={"height": "100px"}
-#                 )
-#             ]),
-#             dbc.ModalFooter([
-#                 dbc.Button(
-#                     "Edit Order",
-#                     id="edit-order-btn",
-#                     color="secondary",
-#                     className="me-2"
-#                 ),
-#                 dbc.Button(
-#                     "Confirm Order",
-#                     id="confirm-final-order-btn",
-#                     color="primary"
-#                 ),
-#             ]),
-#         ],
-#         id="confirm-order-modal",
-#         size="lg",
-#         is_open=False,
-#     )
-    
-#     return modal
-
 def password_change_modal():
     """
     Create a password change modal

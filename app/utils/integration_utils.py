@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 import uuid
 
 # Get Chainlit URL from environment
-CHAINLIT_URL = os.environ.get('CHAINLIT_URL', 'http://localhost:8001')
+CHAINLIT_URL = os.environ.get('CHAINLIT_URL', 'http://localhost:8000')
 
 def generate_chainlit_url(params=None):
     """

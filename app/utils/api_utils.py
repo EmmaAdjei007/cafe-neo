@@ -8,7 +8,7 @@ import time
 import uuid
 
 # Base URLs for APIs
-CHAINLIT_URL = os.environ.get('CHAINLIT_URL', 'http://localhost:8001')
+CHAINLIT_URL = os.environ.get('CHAINLIT_URL', 'http://localhost:8000')
 ROBOT_SIMULATOR_URL = os.environ.get('ROBOT_SIMULATOR_URL', 'http://localhost:8051')
 
 def retry_request(max_retries=3, backoff_factor=0.5):
