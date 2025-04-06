@@ -48,7 +48,10 @@ def register_callbacks(app, socketio):
             try:
                 # Check if we can create the React implementation
                 # Use React implementation
-                return {"display": "none"}, {"display": "block", "height": "600px"}, {"display": "none"}
+                return {"display": "none"}, {"display": "block", "height": "40px"}, html.Div([
+                    html.Script(src="/assets/js/ChatComponent.js"),
+                    html.Div(id="chat-component-mount-point")
+                ])
             except ImportError:
                 # If dash_extensions is not available, use the simple fallback
                 return {"display": "none"}, {"display": "none"}, {"display": "block"}
