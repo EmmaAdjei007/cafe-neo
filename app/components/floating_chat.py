@@ -13,13 +13,15 @@ def create_floating_chat():
     # Floating chat button (fixed position at bottom right)
     chat_button = html.Div(
         html.Button(
-            html.I(className="fas fa-comments"),
+            [
+                html.I(className="fas fa-comments me-2"),
+                html.Span("Chat with BaristaBot", className="chat-button-text")
+            ],
             id="floating-chat-button",
-            className="floating-chat-button"
+            className="floating-chat-button d-flex align-items-center"
         ),
         className="floating-chat-button-container"
     )
-    
     # Chat panel (initially hidden) - Using the original chat layout
     chat_panel = html.Div(
         [
@@ -33,21 +35,31 @@ def create_floating_chat():
                         ],
                         className="d-flex align-items-center"
                     ),
-                    html.Div(
+            html.Div(
+                [
+                    html.Button(
                         [
-                            html.Button(
-                                html.I(className="fas fa-minus"),
-                                id="minimize-chat-button",
-                                className="chat-control-button me-2"
-                            ),
-                            html.Button(
-                                html.I(className="fas fa-times"),
-                                id="close-chat-button",
-                                className="chat-control-button"
-                            )
+                            # Use both Font Awesome and HTML entity for minus
+                            html.I(className="fas fa-minus me-1"),
+                            html.Span("−", className="btn-symbol")  # Unicode minus symbol
                         ],
-                        className="d-flex"
+                        id="minimize-chat-button",
+                        className="chat-control-button me-2",
+                        title="Minimize Chat"
+                    ),
+                    html.Button(
+                        [
+                            # Use both Font Awesome and HTML entity for X
+                            html.I(className="fas fa-times me-1"),
+                            html.Span("×", className="btn-symbol")  # Unicode multiplication X
+                        ],
+                        id="close-chat-button",
+                        className="chat-control-button",
+                        title="Close Chat"
                     )
+                ],
+                className="d-flex"
+            )
                 ],
                 className="chat-panel-header d-flex justify-content-between align-items-center"
             ),

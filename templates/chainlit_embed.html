@@ -29,12 +29,36 @@
             border-radius: 0 0 10px 10px;
             box-shadow: none;
         }
+
+        .error-message {
+            padding: 20px;
+            color: #721c24;
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            border-radius: 5px;
+            margin: 20px;
+            display: none;
+        }
     </style>
 </head>
 <body class="floating-context">
     <iframe id="chatframe" src="{{ chainlit_url }}" allowfullscreen></iframe>
+    <div id="error-message" class="error-message">
+        Unable to connect to chat service. Please try refreshing the page.
+    </div>
     
     <script>
+        // For debugging
+        const DEBUG = window.DEBUG_MODE || false;
+        
+        function debugLog(...args) {
+            if (DEBUG) {
+                console.log('[Chainlit Embed]', ...args);
+            }
+        }
+        
+        debugLog('Initializing Chainlit embed');
+        
         // Check if we're in a floating context
         const isFloating = window.frameElement && 
                           (window.frameElement.id === 'floating-chainlit-frame');
@@ -42,54 +66,77 @@
         // Add appropriate class to body
         if (isFloating) {
             document.body.classList.add('floating-context');
+            debugLog('Running in floating context');
         }
         
-        // Function to send message directly to Chainlit iframe
-        function sendMessageToChainlit(message) {
+        // Track iframe load status
+        let iframeLoaded = false;
+        let frameLoadTimeout = null;
+        
+        // Function to send message to Chainlit iframe
+        window.sendMessageToChainlit = function(message) {
             const iframe = document.getElementById('chatframe');
-            if (iframe && iframe.contentWindow) {
-                console.log('Sending message to Chainlit iframe:', message);
-                
-                // Try multiple message formats to ensure compatibility
-                const messageFormats = [
-                    // Format 1: Standard userMessage format
-                    {
-                        type: 'userMessage',
-                        message: message
-                    },
-                    // Format 2: Direct message format
-                    {
-                        message: message,
-                        type: 'message'
-                    },
-                    // Format 3: Chat message format
-                    {
-                        type: 'chat_message',
-                        content: message
-                    },
-                    // Format 4: Raw text format
-                    message
-                ];
-                
-                // Try each format
-                messageFormats.forEach(format => {
-                    try {
-                        iframe.contentWindow.postMessage(format, '*');
-                    } catch (e) {
-                        console.error('Error sending message format:', e);
-                    }
-                });
-                
-                return true;
+            if (!iframe || !iframe.contentWindow) {
+                debugLog('Iframe not available for sending message');
+                return false;
             }
-            return false;
-        }
+            
+            if (!iframeLoaded) {
+                debugLog('Iframe not loaded yet, queueing message:', message);
+                
+                // Queue the message to send after load
+                setTimeout(() => {
+                    if (iframeLoaded) {
+                        sendMessageToChainlit(message);
+                    }
+                }, 1000);
+                
+                return false;
+            }
+            
+            debugLog('Sending message to Chainlit iframe:', message);
+            
+            // Try multiple message formats to ensure compatibility
+            const messageFormats = [
+                // Format 1: Standard userMessage format
+                {
+                    type: 'userMessage',
+                    message: message
+                },
+                // Format 2: Direct message format
+                {
+                    message: message,
+                    type: 'message'
+                },
+                // Format 3: Chat message format
+                {
+                    type: 'chat_message',
+                    content: message
+                },
+                // Format 4: Raw text format
+                message
+            ];
+            
+            // Try each format
+            let success = false;
+            
+            messageFormats.forEach(format => {
+                try {
+                    iframe.contentWindow.postMessage(format, '*');
+                    success = true;
+                } catch (e) {
+                    debugLog('Error sending message format:', e);
+                }
+            });
+            
+            return success;
+        };
         
         // Handle postMessage communication from parent window
         window.addEventListener('message', function(event) {
             // Only accept messages from the parent window
             if (event.source === window.parent) {
-                console.log('Received message from parent:', event.data);
+                debugLog('Received message from parent:', event.data);
                 
                 // Handle message formats
                 if (typeof event.data === 'string') {
@@ -116,15 +163,35 @@
             const iframe = document.getElementById('chatframe');
             if (iframe && event.source === iframe.contentWindow) {
                 // Send the message to the parent window
-                console.log('Forwarding message to parent:', event.data);
+                debugLog('Forwarding message to parent:', event.data);
                 window.parent.postMessage(event.data, '*');
             }
         });
         
-        // Let the parent know we're ready
-        window.parent.postMessage({type: 'iframe_ready'}, '*');
+        // Handle iframe load event
+        document.getElementById('chatframe').onload = function() {
+            debugLog('Chainlit iframe loaded');
+            iframeLoaded = true;
+            
+            // Clear timeout if it exists
+            if (frameLoadTimeout) {
+                clearTimeout(frameLoadTimeout);
+            }
+            
+            // Hide error message if shown
+            document.getElementById('error-message').style.display = 'none';
+            
+            // Let the parent know we're ready
+            window.parent.postMessage({type: 'iframe_ready'}, '*');
+        };
         
-        console.log('Chainlit embed loaded and ready');
+        // Set timeout to check if iframe loads
+        frameLoadTimeout = setTimeout(function() {
+            if (!iframeLoaded) {
+                debugLog('Iframe failed to load in time');
+                document.getElementById('error-message').style.display = 'block';
+            }
+        }, 10000); // 10 second timeout
     </script>
 </body>
 </html>

@@ -5,54 +5,67 @@
     position: fixed;
     bottom: 20px;
     right: 20px;
-    z-index: 1050;
+    z-index: 1000;
 }
 
 .floating-chat-button {
-    width: 60px;
-    height: 60px;
-    border-radius: 50%;
-    background-color: #6F4E37; /* Coffee brown */
+    background-color: #6F4E37;  /* Coffee brown color */
     color: white;
     border: none;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-    cursor: pointer;
+    border-radius: 30px;
+    padding: 10px 20px;
+    font-size: 16px;
     display: flex;
-    justify-content: center;
     align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
     transition: all 0.3s ease;
-    font-size: 24px;
 }
 
 .floating-chat-button:hover {
-    background-color: #8B5A2B;
-    transform: scale(1.05);
+    background-color: #8B5A2B;  /* Slightly lighter brown on hover */
+    transform: translateY(-2px);
+    box-shadow: 0 6px 15px rgba(0, 0, 0, 0.25);
+}
+
+.floating-chat-button i {
+    font-size: 18px;
 }
 
 /* Floating chat panel styles */
 .floating-chat-panel {
     position: fixed;
-    bottom: 90px;
+    bottom: 20px;
     right: 20px;
-    width: 760px; /* Increased width to accommodate the full layout */
-    height: 550px;
+    width: 350px;
+    height: 500px;
     background-color: white;
-    border-radius: 12px;
-    overflow: hidden;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+    border-radius: 10px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
     display: flex;
     flex-direction: column;
-    z-index: 1040;
+    z-index: 1000;
+    overflow: hidden;
     transition: all 0.3s ease;
 }
 
+.floating-chat-panel.minimized {
+    height: 60px;
+    overflow: hidden;
+}
+
 .chat-panel-header {
-    padding: 12px 16px;
-    background-color: #6F4E37;
+    background-color: #6F4E37; /* Match button color */
     color: white;
-    border-top-left-radius: 12px;
-    border-top-right-radius: 12px;
-    min-height: 60px;
+    padding: 10px 15px;
+    border-radius: 10px 10px 0 0;
+}
+
+/* Hidden for minimized state */
+.floating-chat-panel.minimized .chat-panel-body,
+.floating-chat-panel.minimized .chat-panel-footer {
+    display: none !important;
 }
 
 .chat-panel-body {
@@ -79,24 +92,41 @@
     min-height: 40px;
 }
 
+/* Button symbol styling */
+.btn-symbol {
+    font-size: 16px;
+    font-weight: bold;
+}
+
+/* Hide Font Awesome icon if the HTML entity is visible */
+.btn-symbol:not(:empty) + i {
+    display: none;
+}
+
+/* Make sure Font Awesome is included */
+.chat-control-button .fas {
+    display: inline-block;
+}
+
+/* Better styling for control buttons */
 .chat-control-button {
+    background: rgba(255, 255, 255, 0.2);
+    border: none;
+    color: white;
     width: 30px;
     height: 30px;
     border-radius: 50%;
-    background-color: rgba(255, 255, 255, 0.2);
-    color: white;
-    border: none;
-    cursor: pointer;
     display: flex;
-    justify-content: center;
     align-items: center;
-    transition: all 0.2s ease;
+    justify-content: center;
+    transition: background-color 0.2s;
+    cursor: pointer;
+    padding: 0;
 }
 
 .chat-control-button:hover {
-    background-color: rgba(255, 255, 255, 0.3);
+    background-color: rgba(255, 255, 255, 0.4);
 }
-
 /* Minimized state */
 .floating-chat-panel.minimized {
     height: 60px;
@@ -180,5 +210,21 @@
     
     .chat-panel-body-left {
         height: 100%;
+    }
+}
+
+/* For mobile/responsive design */
+@media (max-width: 768px) {
+    .chat-button-text {
+        display: none;  /* Hide text on small screens */
+    }
+    
+    .floating-chat-button {
+        padding: 12px;
+        border-radius: 50%;  /* Make it circular on mobile */
+    }
+    
+    .floating-chat-button i {
+        margin-right: 0 !important;
     }
 }

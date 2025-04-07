@@ -1,154 +1,124 @@
-// File: assets/js/chat_client.js
+// assets/js/chat_client.js
 
-/**
- * Simplified chat client that focuses on direct iframe communication
- * without relying on Socket.IO
- */
+// Initialize everything once the DOM is ready
+document.addEventListener('DOMContentLoaded', function() {
+    // ========================
+    // Socket.IO initialization
+    // ========================
+    if (typeof io === 'undefined') {
+        console.error('Socket.IO not loaded! Make sure the script is included.');
+        return;
+    }
 
-// Define the clientside namespace for Dash callbacks
-if (!window.clientside) {
-    window.clientside = {};
-}
+    console.log('Initializing chat client...');
 
-// Track if the iframe is ready
-let iframeReady = false;
+    // Connect to the Socket.IO server
+    const socket = io.connect();
+    // Expose socket globally in case it's needed elsewhere (e.g., for quick action fallback)
+    window.socket = socket;
 
-/**
- * Update chat listener for messages from the Chainlit iframe
- */
-window.clientside.updateChatListener = function() {
-    console.log("Setting up message listener for Chainlit iframe");
-    
-    // Set up message listener for communication from iframe
-    window.addEventListener('message', function(event) {
-        // Only handle messages from the Chainlit iframe
-        const iframe = document.getElementById('floating-chainlit-frame');
-        if (iframe && event.source === iframe.contentWindow) {
-            console.log("Received message from Chainlit iframe:", event.data);
-            
-            // Mark iframe as ready when we receive any message from it
-            iframeReady = true;
-            
-            // Store the message data in the hidden div
-            const chatListener = document.getElementById('chat-message-listener');
-            if (chatListener) {
-                chatListener.textContent = JSON.stringify(event.data);
-                
-                // Trigger a custom event to ensure callbacks pick up the change
-                chatListener.dispatchEvent(new Event('change'));
+    // Log connection status
+    socket.on('connect', function() {
+        console.log('Connected to Socket.IO server');
+        socket.emit('ping', { data: 'Chat client connected' });
+    });
+
+    socket.on('disconnect', function() {
+        console.log('Disconnected from Socket.IO server');
+    });
+
+    // Debug helper to log all events
+    socket.onAny((eventName, ...args) => {
+        console.log(`[Socket Event] ${eventName}:`, args);
+    });
+
+    // ========================
+    // Message forwarding logic
+    // ========================
+    socket.on('chat_message_from_dashboard', function(data) {
+        console.log('Received chat message to forward to Chainlit:', data);
+
+        // If the chat panel is hidden, open it first
+        const panel = document.getElementById('floating-chat-panel');
+        if (panel && panel.style.display === 'none') {
+            const chatButton = document.getElementById('floating-chat-button');
+            if (chatButton) {
+                console.log('Opening chat panel first...');
+                chatButton.click();
+
+                // Wait a moment for the panel to open, then send the message
+                setTimeout(function() {
+                    sendMessageToChainlit(data.message);
+                }, 500);
+                return;
             }
         }
+        // Otherwise, send the message directly
+        sendMessageToChainlit(data.message);
     });
-    
-    return "";  // Return empty string as output
-};
 
-/**
- * Send a message directly to the Chainlit iframe
- */
-function sendMessageToChainlit(message) {
-    console.log("Attempting to send message to Chainlit:", message);
-    const iframe = document.getElementById('floating-chainlit-frame');
-    
-    if (!iframe) {
-        console.error("Chainlit iframe not found");
-        alert("Chat interface not loaded. Please refresh the page and try again.");
-        return false;
-    }
-    
-    if (!iframe.contentWindow) {
-        console.error("Iframe contentWindow not available");
-        alert("Cannot communicate with chat interface. Please refresh the page.");
-        return false;
-    }
-    
-    // Type can be different depending on Chainlit implementation
-    // Try all known message formats
-    const messagePayloads = [
-        // Format 1: Standard userMessage format
-        {
-            type: 'userMessage',
-            message: message
-        },
-        // Format 2: Direct message format
-        {
-            message: message,
-            type: 'message'
-        },
-        // Format 3: Chat message format
-        {
-            type: 'chat_message',
-            content: message
+    // Unified function to send messages to the Chainlit iframe
+    function sendMessageToChainlit(message) {
+        console.log('Sending message to Chainlit:', message);
+        const iframe = document.getElementById('floating-chainlit-frame');
+        if (!iframe || !iframe.contentWindow) {
+            console.error('Chainlit iframe not found or not accessible');
+            return false;
         }
-    ];
-    
-    // Try each format
-    for (const payload of messagePayloads) {
+
         try {
-            iframe.contentWindow.postMessage(payload, '*');
-            console.log(`Sent message using format: ${JSON.stringify(payload)}`);
+            // Method 1: Direct postMessage (format 1)
+            iframe.contentWindow.postMessage(message, '*');
+
+            // Method 2: Use the standard userMessage format
+            iframe.contentWindow.postMessage({
+                type: 'userMessage',
+                message: message
+            }, '*');
+
+            // Method 3: If an explicit sendMessage function is exposed, use it
+            if (iframe.contentWindow.sendMessageToChainlit) {
+                iframe.contentWindow.sendMessageToChainlit(message);
+            }
+
+            return true;
         } catch (e) {
-            console.error(`Error sending format ${JSON.stringify(payload)}:`, e);
+            console.error('Error sending message to Chainlit iframe:', e);
+            return false;
         }
     }
-    
-    // Show indicator that the message was sent
-    showFloatingFeedback(`Message sent: ${message}`);
-    
-    // Also ensure the chat panel is visible
-    showChatPanel();
-    
-    return true;
-}
 
-/**
- * Show a floating feedback message 
- */
-function showFloatingFeedback(message, duration = 3000) {
-    // Create or find the feedback element
-    let feedback = document.getElementById('chat-feedback-popup');
-    if (!feedback) {
-        feedback = document.createElement('div');
-        feedback.id = 'chat-feedback-popup';
-        feedback.style.position = 'fixed';
-        feedback.style.bottom = '150px';
-        feedback.style.right = '20px';
-        feedback.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-        feedback.style.color = 'white';
-        feedback.style.padding = '10px 15px';
-        feedback.style.borderRadius = '5px';
-        feedback.style.zIndex = '9999';
-        feedback.style.transition = 'opacity 0.3s ease';
-        feedback.style.opacity = '0';
-        document.body.appendChild(feedback);
-    }
-    
-    // Set message and show
-    feedback.textContent = message;
-    feedback.style.opacity = '1';
-    
-    // Hide after duration
-    setTimeout(() => {
-        feedback.style.opacity = '0';
-    }, duration);
-}
+    // Function to open the chat panel (if closed) and then send a message via Socket.IO
+    window.openChatWithMessage = function(message) {
+        const panel = document.getElementById('floating-chat-panel');
+        if (panel && panel.style.display === 'none') {
+            const chatButton = document.getElementById('floating-chat-button');
+            if (chatButton) {
+                chatButton.click();
+                // Wait for the panel to open before sending the message
+                setTimeout(function() {
+                    socket.emit('send_chat_message', {
+                        message: message,
+                        session_id: localStorage.getItem('chainlit_session_id') || 'default_session'
+                    });
+                }, 500);
+                return;
+            }
+        }
+        // If the panel is already open, send directly
+        socket.emit('send_chat_message', {
+            message: message,
+            session_id: localStorage.getItem('chainlit_session_id') || 'default_session'
+        });
+    };
 
-/**
- * Show the chat panel if it's hidden
- */
-function showChatPanel() {
-    const chatPanel = document.getElementById('floating-chat-panel');
-    if (chatPanel && chatPanel.style.display === 'none') {
-        chatPanel.style.display = 'flex';
-    }
-}
+    // ========================
+    // Quick action buttons setup
+    // ========================
+    console.log('Setting up direct click handlers for quick action buttons');
 
-// Add manual message handling for all quick action buttons
-document.addEventListener('DOMContentLoaded', function() {
-    console.log("DOM loaded, setting up quick action button handlers");
-    
-    // Map of button IDs to message text
-    const messageMap = {
+    // Mapping button IDs to their associated messages
+    const buttonMessages = {
         'quick-order-btn': 'I\'d like to place an order',
         'quick-track-btn': 'Track my order',
         'quick-popular-btn': 'What are your popular items?',
@@ -156,171 +126,62 @@ document.addEventListener('DOMContentLoaded', function() {
         'faq-menu-btn': 'Show me the menu',
         'faq-hours-btn': 'When are you open?',
         'faq-robot-btn': 'How does robot delivery work?',
-        'faq-popular-btn': "What\'s your most popular coffee?",
+        'faq-popular-btn': "What's your most popular coffee?",
         'menu-faq-btn': 'Show me the menu',
         'hours-faq-btn': 'When are you open?',
         'robot-faq-btn': 'How does robot delivery work?',
-        'popular-faq-btn': "What\'s your most popular coffee?",
+        'popular-faq-btn': "What's your most popular coffee?",
         'voice-toggle-btn': 'Toggle voice mode'
     };
-    
-    // Helper to ensure we have all buttons
-    function setupDirectHandlers() {
-        console.log("Setting up direct button handlers");
-        
-        // Add handlers to all potential buttons
-        Object.keys(messageMap).forEach(buttonId => {
+
+    // Set up click handlers for the buttons
+    function setupButtonHandlers() {
+        Object.keys(buttonMessages).forEach(function(buttonId) {
             const button = document.getElementById(buttonId);
             if (button) {
-                console.log(`Found button: ${buttonId}`);
-                
-                // Add direct click handling
+                console.log('Setting up handler for button:', buttonId);
                 button.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    const message = messageMap[buttonId];
-                    console.log(`Button ${buttonId} clicked, sending: "${message}"`);
-                    sendMessageToChainlit(message);
-                    return false;
+                    console.log('Button clicked:', buttonId);
+                    const message = buttonMessages[buttonId];
+
+                    // Ensure the chat panel is open before sending the message
+                    const chatPanel = document.getElementById('floating-chat-panel');
+                    const chatButton = document.getElementById('floating-chat-button');
+                    if (chatPanel && chatPanel.style.display === 'none' && chatButton) {
+                        chatButton.click();
+                        setTimeout(function() {
+                            // Use our unified send function
+                            sendMessageToChainlit(message);
+                        }, 500);
+                    } else {
+                        // Send immediately if already open
+                        sendMessageToChainlit(message);
+                    }
                 });
             }
         });
     }
-    
-    // First attempt when DOM is ready
-    setupDirectHandlers();
-    
-    // Second attempt after a delay to ensure all elements are rendered
-    setTimeout(setupDirectHandlers, 2000);
-    
-    // Add additional handlers whenever the chat panel is shown
-    const chatButton = document.getElementById('floating-chat-button');
-    if (chatButton) {
-        chatButton.addEventListener('click', function() {
-            setTimeout(setupDirectHandlers, 500);
-        });
-    }
-    
-    // Add debug button
-    const debugButton = document.createElement('button');
-    debugButton.id = 'debug-chat-button';
-    debugButton.textContent = 'Debug Chat';
-    debugButton.style.position = 'fixed';
-    debugButton.style.bottom = '90px';
-    debugButton.style.right = '20px';
-    debugButton.style.zIndex = '9999';
-    debugButton.style.padding = '5px 10px';
-    debugButton.style.backgroundColor = '#666';
-    debugButton.style.color = 'white';
-    debugButton.style.border = 'none';
-    debugButton.style.borderRadius = '4px';
-    debugButton.style.cursor = 'pointer';
-    document.body.appendChild(debugButton);
-    
-    // Add debug functionality
-    debugButton.addEventListener('click', function() {
-        // Create debug panel if it doesn't exist
-        let debugPanel = document.getElementById('debug-panel');
-        if (!debugPanel) {
-            debugPanel = document.createElement('div');
-            debugPanel.id = 'debug-panel';
-            debugPanel.style.position = 'fixed';
-            debugPanel.style.top = '20px';
-            debugPanel.style.right = '20px';
-            debugPanel.style.width = '400px';
-            debugPanel.style.padding = '10px';
-            debugPanel.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
-            debugPanel.style.color = 'white';
-            debugPanel.style.zIndex = '10000';
-            debugPanel.style.borderRadius = '5px';
-            debugPanel.style.fontFamily = 'monospace';
-            debugPanel.style.fontSize = '12px';
-            document.body.appendChild(debugPanel);
-            
-            // Add test buttons
-            const testMessageBtn = document.createElement('button');
-            testMessageBtn.textContent = 'Send Test Message';
-            testMessageBtn.style.padding = '5px 10px';
-            testMessageBtn.style.margin = '5px';
-            testMessageBtn.style.border = 'none';
-            testMessageBtn.style.backgroundColor = '#4CAF50';
-            testMessageBtn.style.color = 'white';
-            testMessageBtn.style.borderRadius = '3px';
-            testMessageBtn.style.cursor = 'pointer';
-            testMessageBtn.addEventListener('click', function() {
-                sendMessageToChainlit('Test message');
-            });
-            debugPanel.appendChild(testMessageBtn);
-            
-            // Add button to check iframe
-            const checkIframeBtn = document.createElement('button');
-            checkIframeBtn.textContent = 'Check Iframe';
-            checkIframeBtn.style.padding = '5px 10px';
-            checkIframeBtn.style.margin = '5px';
-            checkIframeBtn.style.border = 'none';
-            checkIframeBtn.style.backgroundColor = '#2196F3';
-            checkIframeBtn.style.color = 'white';
-            checkIframeBtn.style.borderRadius = '3px';
-            checkIframeBtn.style.cursor = 'pointer';
-            checkIframeBtn.addEventListener('click', function() {
-                const iframe = document.getElementById('floating-chainlit-frame');
-                if (!iframe) {
-                    logToDebug('Iframe not found');
-                } else {
-                    logToDebug(`Iframe found: ${iframe.src}`);
-                    if (iframe.contentWindow) {
-                        logToDebug('ContentWindow available');
-                    } else {
-                        logToDebug('ContentWindow NOT available');
+
+    // Call setup once on initial load
+    setupButtonHandlers();
+
+    // Use a MutationObserver to catch any buttons added dynamically to the page
+    const observer = new MutationObserver(function(mutations) {
+        let shouldSetup = false;
+        mutations.forEach(function(mutation) {
+            if (mutation.addedNodes.length) {
+                for (let i = 0; i < mutation.addedNodes.length; i++) {
+                    const node = mutation.addedNodes[i];
+                    if (node.nodeType === 1 && (node.id in buttonMessages || node.querySelector)) {
+                        shouldSetup = true;
+                        break;
                     }
                 }
-            });
-            debugPanel.appendChild(checkIframeBtn);
-            
-            // Add clear button
-            const clearBtn = document.createElement('button');
-            clearBtn.textContent = 'Clear Log';
-            clearBtn.style.padding = '5px 10px';
-            clearBtn.style.margin = '5px';
-            clearBtn.style.border = 'none';
-            clearBtn.style.backgroundColor = '#f44336';
-            clearBtn.style.color = 'white';
-            clearBtn.style.borderRadius = '3px';
-            clearBtn.style.cursor = 'pointer';
-            clearBtn.addEventListener('click', function() {
-                const logArea = document.getElementById('debug-log-area');
-                if (logArea) {
-                    logArea.innerHTML = '';
-                }
-            });
-            debugPanel.appendChild(clearBtn);
-            
-            // Add log area
-            const logArea = document.createElement('div');
-            logArea.id = 'debug-log-area';
-            logArea.style.marginTop = '10px';
-            logArea.style.height = '200px';
-            logArea.style.overflow = 'auto';
-            logArea.style.padding = '5px';
-            logArea.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
-            logArea.style.borderRadius = '3px';
-            debugPanel.appendChild(logArea);
-        } else {
-            // Toggle visibility
-            debugPanel.style.display = debugPanel.style.display === 'none' ? 'block' : 'none';
+            }
+        });
+        if (shouldSetup) {
+            setupButtonHandlers();
         }
     });
-    
-    // Helper to log to debug panel
-    window.logToDebug = function(message) {
-        console.log(message);
-        const logArea = document.getElementById('debug-log-area');
-        if (logArea) {
-            const logEntry = document.createElement('div');
-            logEntry.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
-            logEntry.style.marginBottom = '3px';
-            logEntry.style.borderBottom = '1px solid #333';
-            logArea.appendChild(logEntry);
-            logArea.scrollTop = logArea.scrollHeight;
-        }
-    };
+    observer.observe(document.body, { childList: true, subtree: true });
 });

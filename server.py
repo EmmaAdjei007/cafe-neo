@@ -107,13 +107,25 @@ def configure_server(server, socketio):
             
             # Forward the message to all clients (including the Chainlit iframe)
             print(f"Broadcasting chat_message_from_dashboard to all clients")
-            socketio.emit('chat_message_from_dashboard', {
+            
+            # Make sure the data is properly formatted
+            emit_data = {
                 'message': message,
                 'session_id': session_id
-            })
+            }
+            
+            # Emit to everyone, including sender (this is important)
+            socketio.emit('chat_message_from_dashboard', emit_data, broadcast=True, include_self=True)
+            
+            # For debugging - also emit to a topic the client might be listening on
+            socketio.emit('update_chat_message_listener', json.dumps({
+                'type': 'user_message',
+                'message': message,
+                'session_id': session_id
+            }))
             
             # Acknowledge receipt
-            return {'status': 'success', 'message': 'Message sent to Chainlit'}
+            return {'status': 'success', 'message': f'Message sent to Chainlit: {message}'}
         except Exception as e:
             print(f"Error in handle_send_chat_message: {str(e)}")
             return {'status': 'error', 'message': str(e)}

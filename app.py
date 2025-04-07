@@ -45,12 +45,14 @@ socketio = SocketIO(
 # Initialize Dash with a coffee-themed bootstrap and additional CSS/JS
 external_stylesheets = [
     dbc.themes.BOOTSTRAP, 
+    'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css',  
     '/assets/css/styles.css',
     '/assets/css/floating_chat.css'  # Add floating chat CSS
 ]
 
 external_scripts = [
-    '/assets/js/chat_client.js'  # Add chat client JS
+    '/assets/js/chat_client.js',  # Add chat client JS
+    '/assets/js/clientside.js'    # Add clientside JS
 ]
 
 app = Dash(__name__, 
