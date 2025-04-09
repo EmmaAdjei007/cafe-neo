@@ -1,311 +1,178 @@
 /**
- * Robust Chat Messenger for Neo Cafe
- * This file provides robust message sending between the dashboard and Chainlit
- * with multiple fallback mechanisms and automatic retries.
+ * Chat Messenger for Neo Cafe
+ * A client-side utility for sending messages to the Chainlit chatbot
  */
 
-(function() {
-    // Debug mode
-    const DEBUG = window.DEBUG_MODE || true;
+// Create a namespace for the chat client
+window.chatClient = (function() {
+    // Internal variables
+    let isConnected = false;
+    let messageQueue = [];
+    let retryCount = 0;
+    const MAX_RETRIES = 5;
     
-    // Configuration
-    const MAX_RETRIES = 3;
-    const RETRY_DELAY = 500; // ms
-    const IFRAME_LOAD_TIMEOUT = 5000; // ms
-    
-    // Debug log helper
-    function debugLog(...args) {
-        if (DEBUG) {
-            console.log('[ChatMessenger]', ...args);
-        }
+    // Find all possible iframe paths
+    function findChatIframe() {
+        const iframes = [
+            document.getElementById('floating-chainlit-frame'),
+            document.getElementById('chatframe'),
+            ...Array.from(document.querySelectorAll('iframe')).filter(
+                iframe => iframe.src && iframe.src.includes('chainlit')
+            )
+        ].filter(Boolean);
+        
+        return iframes.length > 0 ? iframes[0] : null;
     }
     
-    // Initialize when DOM is loaded
-    document.addEventListener('DOMContentLoaded', function() {
-        debugLog('Initializing robust chat messenger');
+    // Process queued messages
+    function processQueue() {
+        console.log(`[ChatClient] Processing ${messageQueue.length} queued messages`);
         
-        // Keep track of iframe ready state
-        let iframeReady = false;
-        let iframeLoaded = false;
-        let socketConnected = false;
-        let messagePendingQueue = [];
+        // Create a copy of the queue and clear it
+        const queueCopy = [...messageQueue];
+        messageQueue = [];
         
-        // Get references to key elements
-        const getIframe = () => document.getElementById('floating-chainlit-frame');
-        const getChatPanel = () => document.getElementById('floating-chat-panel');
+        // Process each message
+        queueCopy.forEach(message => {
+            sendMessage(message, true);
+        });
+    }
+    
+    // Send a message using any available method
+    function sendMessage(message, isFromQueue = false) {
+        console.log(`[ChatClient] Sending message: ${message}`);
         
-        // Monitor socket connection status
-        function checkSocketStatus() {
-            if (window.socket) {
-                socketConnected = window.socket.connected;
-                return socketConnected;
-            }
-            return false;
-        }
-        
-        // Function to safely send a message using all available methods
-        function sendMessage(message, options = {}) {
-            const defaultOptions = {
-                sessionId: null,
-                retry: 0,
-                openPanel: false,
-                showLog: true
-            };
-            
-            const config = {...defaultOptions, ...options};
-            
-            if (config.showLog) {
-                debugLog(`Sending message: "${message}" (retry: ${config.retry})`);
-            }
-            
-            // If we need to open the panel, do that first
-            if (config.openPanel) {
-                const panel = getChatPanel();
-                if (panel) {
-                    panel.style.display = 'flex';
-                    panel.className = 'floating-chat-panel';
-                    
-                    // If we're opening the panel, give it time to initialize
-                    if (config.retry === 0) {
-                        setTimeout(() => {
-                            sendMessage(message, {...config, retry: 0, openPanel: false});
-                        }, 500);
-                        return;
-                    }
-                }
-            }
-            
-            // If the iframe isn't ready yet, queue the message
-            if (!iframeReady && config.retry === 0) {
-                debugLog('Iframe not ready, queueing message');
-                messagePendingQueue.push({message, options: config});
-                
-                // Wait for iframe to be ready
-                waitForIframe();
-                return;
-            }
-            
-            // Track whether any method succeeded
-            let methodSucceeded = false;
-            
-            // 1. Try direct postMessage to iframe
+        // If message is not a string, try to convert it
+        if (typeof message !== 'string') {
             try {
-                const iframe = getIframe();
-                if (iframe && iframe.contentWindow) {
-                    // Try multiple message formats to ensure compatibility
-                    
-                    // Format 1: Standard message object
-                    iframe.contentWindow.postMessage({
-                        type: 'userMessage',
-                        message: message
-                    }, '*');
-                    
-                    // Format 2: Another possible format
-                    iframe.contentWindow.postMessage({
-                        kind: 'user_message',
-                        data: {
-                            content: message
-                        }
-                    }, '*');
-                    
-                    // Format 3: Direct string
-                    iframe.contentWindow.postMessage(message, '*');
-                    
-                    methodSucceeded = true;
-                    debugLog('Message sent via postMessage');
-                }
+                message = JSON.stringify(message);
             } catch (e) {
-                debugLog('Error sending via postMessage:', e);
-            }
-            
-            // 2. Try via Socket.IO if available
-            if (checkSocketStatus()) {
-                try {
-                    window.socket.emit('send_chat_message', {
-                        message: message,
-                        session_id: config.sessionId || window.sessionId || localStorage.getItem('chatSessionId') || undefined
-                    });
-                    methodSucceeded = true;
-                    debugLog('Message sent via Socket.IO');
-                } catch (e) {
-                    debugLog('Error sending via Socket.IO:', e);
-                }
-            }
-            
-            // 3. Try via chatClient
-            if (window.chatClient && window.chatClient.sendMessage) {
-                try {
-                    window.chatClient.sendMessage(message, config.sessionId);
-                    methodSucceeded = true;
-                    debugLog('Message sent via chatClient');
-                } catch (e) {
-                    debugLog('Error sending via chatClient:', e);
-                }
-            }
-            
-            // 4. Try via direct_message_to_chainlit Socket.IO event
-            if (checkSocketStatus()) {
-                try {
-                    window.socket.emit('direct_message_to_chainlit', {
-                        message: message,
-                        session_id: config.sessionId
-                    });
-                    methodSucceeded = true;
-                    debugLog('Message sent via direct_message_to_chainlit');
-                } catch (e) {
-                    debugLog('Error sending via direct_message_to_chainlit:', e);
-                }
-            }
-            
-            // 5. If no method succeeded and we haven't exceeded max retries, try again
-            if (!methodSucceeded && config.retry < MAX_RETRIES) {
-                debugLog(`All message methods failed, retrying (${config.retry + 1}/${MAX_RETRIES})...`);
-                setTimeout(() => {
-                    sendMessage(message, {...config, retry: config.retry + 1});
-                }, RETRY_DELAY * (config.retry + 1)); // Exponential backoff
-            } else if (!methodSucceeded) {
-                debugLog('All message methods failed after maximum retries');
-                
-                // Last resort: Try to reload the iframe
-                if (config.retry >= MAX_RETRIES) {
-                    debugLog('Attempting to reload iframe as last resort');
-                    const iframe = getIframe();
-                    if (iframe) {
-                        const currentSrc = iframe.src;
-                        iframe.src = currentSrc; // Reload
-                        
-                        // Re-queue the message after reload
-                        setTimeout(() => {
-                            sendMessage(message, {...config, retry: 0});
-                        }, 2000);
-                    }
-                }
-            }
-            
-            return methodSucceeded;
-        }
-        
-        // Wait for iframe to be ready with timeout
-        function waitForIframe() {
-            if (iframeReady) return;
-            
-            const iframe = getIframe();
-            if (!iframe) {
-                debugLog('Iframe element not found in DOM');
-                return;
-            }
-            
-            // Set up load event listener
-            if (!iframeLoaded) {
-                iframeLoaded = true;
-                
-                iframe.onload = function() {
-                    debugLog('Iframe loaded');
-                    iframeReady = true;
-                    
-                    // Process queued messages
-                    processMessageQueue();
-                };
-                
-                // Set up timeout
-                setTimeout(() => {
-                    if (!iframeReady) {
-                        debugLog('Iframe load timeout, forcing ready state');
-                        iframeReady = true;
-                        
-                        // Process queued messages even though iframe might not be fully ready
-                        processMessageQueue();
-                    }
-                }, IFRAME_LOAD_TIMEOUT);
-            }
-            
-            // Check if iframe is already loaded (happens when this script loads after iframe)
-            if (iframe.contentDocument && 
-                iframe.contentDocument.readyState === 'complete') {
-                debugLog('Iframe already loaded');
-                iframeReady = true;
-                processMessageQueue();
+                console.error('[ChatClient] Could not convert message to string:', e);
+                return false;
             }
         }
         
-        // Process queued messages
-        function processMessageQueue() {
-            debugLog(`Processing ${messagePendingQueue.length} queued messages`);
-            
-            // Process each message with a delay between them
-            messagePendingQueue.forEach((item, index) => {
-                setTimeout(() => {
-                    sendMessage(item.message, {...item.options, retry: 0});
-                }, index * 300); // Stagger the messages
-            });
-            
-            // Clear the queue
-            messagePendingQueue = [];
+        // Try different methods in order of preference
+        
+        // Method 1: Use the direct message handler
+        if (window.sendDirectMessageToChainlit) {
+            console.log('[ChatClient] Using directMessageToChainlit');
+            const success = window.sendDirectMessageToChainlit(message);
+            if (success) return true;
         }
         
-        // Listen for iframe ready message
+        // Method 2: Post directly to iframe
+        const iframe = findChatIframe();
+        if (iframe && iframe.contentWindow) {
+            try {
+                console.log('[ChatClient] Using iframe postMessage');
+                
+                // Try different message formats
+                const formats = [
+                    { type: 'direct_message', message },
+                    { type: 'userMessage', message },
+                    { kind: 'user_message', data: { content: message } },
+                    message // Plain string as fallback
+                ];
+                
+                // Send all formats
+                formats.forEach(format => {
+                    iframe.contentWindow.postMessage(format, '*');
+                });
+                
+                return true;
+            } catch (e) {
+                console.error('[ChatClient] Error posting to iframe:', e);
+            }
+        }
+        
+        // Method 3: Use Socket.IO if available
+        if (window.socket && window.socket.emit) {
+            try {
+                console.log('[ChatClient] Using Socket.IO');
+                window.socket.emit('chat_message_from_dashboard', {
+                    message: message,
+                    session_id: Date.now().toString()
+                });
+                return true;
+            } catch (e) {
+                console.error('[ChatClient] Error sending via Socket.IO:', e);
+            }
+        }
+        
+        // If we get here, no method succeeded
+        if (!isFromQueue) {
+            // Queue the message for retry if it's not already from the queue
+            messageQueue.push(message);
+            
+            // Try again after a delay if we haven't exceeded the retry limit
+            if (retryCount < MAX_RETRIES) {
+                retryCount++;
+                console.log(`[ChatClient] Message queued, will retry in ${retryCount}s`);
+                setTimeout(processQueue, retryCount * 1000);
+            }
+        }
+        
+        return false;
+    }
+    
+    // Initialize the chat client
+    function init() {
+        console.log('[ChatClient] Initializing');
+        
+        // Listen for iframe ready events
         window.addEventListener('message', function(event) {
-            // Check if it's the ready message from iframe
-            if (event.data && event.data.type === 'iframe_ready') {
-                debugLog('Received iframe_ready message');
-                iframeReady = true;
-                processMessageQueue();
+            // Check if it's a ready message
+            if (event.data && 
+                (event.data === 'ready' || 
+                 (typeof event.data === 'object' && event.data.type === 'iframe_ready'))) {
+                console.log('[ChatClient] Iframe reported ready');
+                isConnected = true;
+                retryCount = 0;
+                processQueue();
             }
         });
         
-        // Check Socket.IO connection at intervals
-        setInterval(checkSocketStatus, 5000);
-        
-        // Generate a session ID if needed
-        if (!window.sessionId) {
-            const storedSessionId = localStorage.getItem('chatSessionId');
-            if (storedSessionId) {
-                window.sessionId = storedSessionId;
-            } else {
-                // Generate a new UUID
-                window.sessionId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-                    const r = Math.random() * 16 | 0;
-                    const v = c === 'x' ? r : (r & 0x3 | 0x8);
-                    return v.toString(16);
-                });
-                localStorage.setItem('chatSessionId', window.sessionId);
+        // Set up retry logic
+        setTimeout(function checkConnection() {
+            if (!isConnected && messageQueue.length > 0) {
+                console.log('[ChatClient] Trying to process queue...');
+                processQueue();
             }
-            debugLog('Session ID:', window.sessionId);
-        }
+            setTimeout(checkConnection, 5000); // Check every 5 seconds
+        }, 5000);
         
-        // Expose the API
-        window.chatMessenger = {
-            sendMessage: sendMessage,
-            
-            openChatAndSendMessage: function(message, sessionId) {
-                return sendMessage(message, {
-                    sessionId: sessionId || window.sessionId,
-                    openPanel: true,
-                    retry: 0
-                });
-            },
-            
-            // Helper to check status
-            getStatus: function() {
-                return {
-                    iframeReady,
-                    socketConnected: checkSocketStatus(),
-                    queueLength: messagePendingQueue.length,
-                    sessionId: window.sessionId
-                };
-            }
+        return {
+            sendMessage,
+            getQueueLength: () => messageQueue.length,
+            isConnected: () => isConnected
         };
-        
-        // Make sendDirectMessageToChainlit use our robust implementation
-        window.sendDirectMessageToChainlit = function(message) {
-            return window.chatMessenger.sendMessage(message);
-        };
-        
-        // Make sendAndOpenChat use our robust implementation
-        window.sendAndOpenChat = function(message) {
-            return window.chatMessenger.openChatAndSendMessage(message);
-        };
-        
-        debugLog('Chat messenger initialized');
-    });
+    }
+    
+    // Return the public API
+    return init();
 })();
+
+// Make sure chat panel is visible when needed
+document.addEventListener('DOMContentLoaded', function() {
+    // Add click listeners to quick action buttons
+    const quickActionButtons = [
+        'quick-order-btn', 'quick-track-btn', 'quick-popular-btn', 'quick-hours-btn',
+        'faq-menu-btn', 'faq-hours-btn', 'faq-robot-btn', 'faq-popular-btn',
+        'menu-faq-btn', 'hours-faq-btn', 'robot-faq-btn', 'popular-faq-btn'
+    ];
+    
+    quickActionButtons.forEach(btnId => {
+        const btn = document.getElementById(btnId);
+        if (btn) {
+            btn.addEventListener('click', function() {
+                // Show chat panel
+                const panel = document.getElementById('floating-chat-panel');
+                if (panel) {
+                    panel.style.display = 'flex';
+                    panel.className = 'floating-chat-panel';
+                }
+            });
+        }
+    });
+});

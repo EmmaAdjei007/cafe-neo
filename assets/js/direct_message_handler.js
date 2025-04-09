@@ -1,100 +1,71 @@
 /**
- * Direct Message Handler for communicating with Chainlit iframe
- * This file handles sending messages directly to the Chainlit iframe using postMessage
+ * Direct Message Handler for Neo Cafe
+ * Handles sending messages from the dashboard to the Chainlit chatbot
  */
 
-(function() {
-    // Debug mode - set to true to see debug messages in console
-    const DEBUG = window.DEBUG_MODE || false;
+// Track if the Chainlit iframe has been loaded
+let chainlitFrameLoaded = false;
+let messageQueue = [];
+
+// Define the global function to send messages to Chainlit
+window.sendDirectMessageToChainlit = function(message) {
+    console.log("Attempting to send message to Chainlit:", message);
     
-    // Debug log helper
-    function debugLog(...args) {
-        if (DEBUG) {
-            console.log('[DirectMessageHandler]', ...args);
-        }
+    // First, make sure the chat panel is visible
+    const panel = document.getElementById('floating-chat-panel');
+    if (panel) {
+        panel.style.display = 'flex';
+        panel.className = 'floating-chat-panel';
     }
     
-    // Initialize when DOM is loaded
-    document.addEventListener('DOMContentLoaded', function() {
-        debugLog('Initializing Direct Message Handler');
+    // Find the Chainlit iframe
+    const iframe = document.getElementById('floating-chainlit-frame');
+    if (!iframe || !iframe.contentWindow) {
+        console.error("Chainlit iframe not found or not accessible");
+        queueMessage(message);
+        return false;
+    }
+    
+    // If iframe is not loaded yet, queue the message
+    if (!chainlitFrameLoaded) {
+        console.log("Chainlit iframe not yet loaded, queueing message");
+        queueMessage(message);
+        return false;
+    }
+    
+    // If message is not a string, JSON stringify it
+    if (typeof message !== 'string') {
+        message = JSON.stringify(message);
+    }
+    
+    // Try to send the message using multiple formats to ensure it works
+    try {
+        // Based on the messages you're seeing in Chainlit, this format is working:
+        iframe.contentWindow.postMessage({
+            type: 'direct_message',
+            message: message
+        }, '*');
         
-        // Store a reference to the Chainlit iframe
-        const getChainlitIframe = () => document.getElementById('floating-chainlit-frame');
+        // Also try these alternative formats
+        iframe.contentWindow.postMessage({
+            type: 'userMessage',
+            message: message
+        }, '*');
         
-        // Function to send message to the iframe
-        window.sendDirectMessageToChainlit = function(message) {
-            debugLog('Attempting to send message to Chainlit:', message);
-            
-            const iframe = getChainlitIframe();
-            if (!iframe) {
-                debugLog('Error: Chainlit iframe not found in DOM');
-                return false;
+        iframe.contentWindow.postMessage({
+            kind: 'user_message',
+            data: {
+                content: message
             }
-            
-            try {
-                // Try to send via postMessage in the format Chainlit expects
-                iframe.contentWindow.postMessage({
-                    type: 'userMessage',
-                    message: message
-                }, '*');
-                
-                // Also try older/alternate Chainlit format as fallback
-                iframe.contentWindow.postMessage({
-                    kind: 'user_message',
-                    data: {
-                        content: message
-                    }
-                }, '*');
-                
-                debugLog('Message sent via postMessage');
-                return true;
-            } catch (e) {
-                debugLog('Error sending via postMessage:', e);
-                return false;
-            }
-        };
+        }, '*');
         
-        // Function to open the chat panel and send a message
-        window.sendAndOpenChat = function(message) {
-            debugLog('Opening chat panel and sending message:', message);
-            
-            // First make sure the chat panel is visible
-            const chatPanel = document.getElementById('floating-chat-panel');
-            if (chatPanel) {
-                // Show the panel
-                chatPanel.style.display = 'flex';
-                
-                // Set a class to ensure it's fully visible
-                chatPanel.className = 'floating-chat-panel';
-                
-                // Create a small delay to ensure the iframe is loaded
-                setTimeout(() => {
-                    window.sendDirectMessageToChainlit(message);
-                }, 500);
-                
-                return true;
-            }
-            
-            debugLog('Error: Chat panel not found');
-            return false;
-        };
+        // Try simple string format as last resort
+        iframe.contentWindow.postMessage(message, '*');
         
-        // Listen for messages from the iframe
-        window.addEventListener('message', function(event) {
-            // Filter messages from the Chainlit iframe
-            const iframe = getChainlitIframe();
-            if (iframe && event.source === iframe.contentWindow) {
-                debugLog('Received message from Chainlit iframe:', event.data);
-                
-                // Process specific message types
-                if (event.data && event.data.type === 'navigation') {
-                    debugLog('Navigation requested:', event.data.destination);
-                    // Handle navigation requests from the iframe
-                    if (event.data.destination) {
-                        window.location.href = '/' + event.data.destination;
-                    }
-                }
-            }
-        });
-    });
-})();
+        console.log("Message sent to Chainlit iframe using multiple formats");
+        return true;
+    } catch (e) {
+        console.error("Error sending message to Chainlit:", e);
+        return false;
+    }
+};

@@ -39,10 +39,39 @@
             margin: 20px;
             display: none;
         }
+
+        .loading-indicator {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 4px solid #6F4E37;
+            width: 40px;
+            height: 40px;
+            margin: 0 auto 15px auto;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body class="floating-context">
+    <div id="loading-indicator" class="loading-indicator">
+        <div class="spinner"></div>
+        <div>Loading Barista Bot...</div>
+    </div>
+    
     <iframe id="chatframe" src="{{ chainlit_url }}" allowfullscreen></iframe>
+    
     <div id="error-message" class="error-message">
         Unable to connect to chat service. Please try refreshing the page.
     </div>
@@ -72,46 +101,7 @@
         // Track iframe load status
         let iframeLoaded = false;
         let frameLoadTimeout = null;
-        
-        // Handle direct messages from the parent window
-        window.addEventListener('message', function(event) {
-            // Only accept messages from the parent window
-            if (event.source === window.parent) {
-                debugLog('Received message from parent:', event.data);
-                
-                // Check if it's a direct message - handle multiple formats
-                const messageData = event.data;
-                
-                let message = null;
-                if (typeof messageData === 'string') {
-                    message = messageData;
-                } else if (messageData) {
-                    // Extract message from various possible formats
-                    if (messageData.message) {
-                        message = messageData.message;
-                    } else if (messageData.type === 'direct_message' || messageData.type === 'userMessage') {
-                        message = messageData.message;
-                    } else if (messageData.kind === 'user_message' && messageData.data) {
-                        message = messageData.data.content;
-                    }
-                }
-                
-                if (message) {
-                    debugLog('Processing direct message:', message);
-                    
-                    // Wait until iframe is loaded
-                    if (!iframeLoaded) {
-                        debugLog('Iframe not loaded yet, waiting...');
-                        setTimeout(() => {
-                            sendToChainlit(message);
-                        }, 1000);
-                        return;
-                    }
-                    
-                    sendToChainlit(message);
-                }
-            }
-        });
+        let messageQueue = [];
         
         // Function to send message to Chainlit
         function sendToChainlit(message) {
@@ -120,6 +110,14 @@
             const iframe = document.getElementById('chatframe');
             if (!iframe || !iframe.contentWindow) {
                 debugLog('Iframe not accessible');
+                messageQueue.push(message);
+                return false;
+            }
+            
+            // If iframe isn't loaded yet, queue the message
+            if (!iframeLoaded) {
+                debugLog('Iframe not loaded, queueing message');
+                messageQueue.push(message);
                 return false;
             }
             
@@ -151,10 +149,59 @@
             }
         }
         
+        // Process any queued messages
+        function processMessageQueue() {
+            if (messageQueue.length > 0) {
+                debugLog(`Processing ${messageQueue.length} queued messages`);
+                
+                // Make a copy of the queue and clear it
+                const queueCopy = [...messageQueue];
+                messageQueue = [];
+                
+                // Process each message in the queue
+                queueCopy.forEach(message => {
+                    sendToChainlit(message);
+                });
+            }
+        }
+        
+        // Handle direct messages from the parent window
+        window.addEventListener('message', function(event) {
+            // Only accept messages from the parent window
+            if (event.source === window.parent) {
+                debugLog('Received message from parent:', event.data);
+                
+                // Check if it's a direct message - handle multiple formats
+                const messageData = event.data;
+                
+                let message = null;
+                if (typeof messageData === 'string') {
+                    message = messageData;
+                } else if (messageData) {
+                    // Extract message from various possible formats
+                    if (messageData.message) {
+                        message = messageData.message;
+                    } else if (messageData.type === 'direct_message' || messageData.type === 'userMessage') {
+                        message = messageData.message;
+                    } else if (messageData.kind === 'user_message' && messageData.data) {
+                        message = messageData.data.content;
+                    }
+                }
+                
+                if (message) {
+                    debugLog('Processing direct message:', message);
+                    sendToChainlit(message);
+                }
+            }
+        });
+        
         // Handle iframe load event
         document.getElementById('chatframe').onload = function() {
             debugLog('Chainlit iframe loaded');
             iframeLoaded = true;
+            
+            // Hide loading indicator
+            document.getElementById('loading-indicator').style.display = 'none';
             
             // Clear timeout if it exists
             if (frameLoadTimeout) {
@@ -166,6 +213,9 @@
             
             // Let the parent know we're ready
             window.parent.postMessage({type: 'iframe_ready'}, '*');
+            
+            // Process any queued messages
+            setTimeout(processMessageQueue, 1000);
         };
         
         // Set timeout to check if iframe loads
@@ -173,8 +223,9 @@
             if (!iframeLoaded) {
                 debugLog('Iframe failed to load in time');
                 document.getElementById('error-message').style.display = 'block';
+                document.getElementById('loading-indicator').style.display = 'none';
             }
-        }, 10000); // 10 second timeout
+        }, 15000); // 15 second timeout
         
         // Create global function for direct access
         window.sendMessage = sendToChainlit;

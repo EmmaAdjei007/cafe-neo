@@ -178,3 +178,31 @@ def configure_server(server, socketio):
     def handle_direct_message_error(e):
         """Handle errors in direct_message_to_chainlit event"""
         handle_socketio_error(e)
+
+    @socketio.on('chat_message_from_dashboard')
+    def handle_chat_message_from_dashboard(data):
+        """Handle chat messages from the dashboard"""
+        try:
+            message = data.get('message')
+            session_id = data.get('session_id', str(uuid.uuid4()))
+            
+            print(f"Received chat message from dashboard: {message}")
+            print(f"Session ID: {session_id}")
+            
+            # Broadcast to all clients to ensure the iframe gets it
+            socketio.emit('chat_message_from_dashboard', {
+                'message': message,
+                'session_id': session_id
+            }, broadcast=True)
+            
+            # Also update the chat message listener for compatibility
+            socketio.emit('update_chat_message_listener', json.dumps({
+                'type': 'user_message',
+                'message': message,
+                'session_id': session_id
+            }))
+            
+            return {'status': 'success', 'message': 'Message broadcast successfully'}
+        except Exception as e:
+            print(f"Error in handle_chat_message_from_dashboard: {e}")
+            return {'status': 'error', 'message': str(e)}
