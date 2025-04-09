@@ -45,23 +45,54 @@ def register_socketio_handlers(socketio):
     """
     @socketio.on('connect')
     def handle_connect():
+        """Handle client connection"""
         print('Client connected')
     
+    # Fix: Add the sid parameter to handle_disconnect
     @socketio.on('disconnect')
-    def handle_disconnect():
-        print('Client disconnected')
+    def handle_disconnect(sid=None):
+        """Handle client disconnection"""
+        print(f'Client disconnected: {sid}')
     
     @socketio.on('new_order')
     def handle_new_order(data):
+        """
+        Handle new order notification
+        
+        Args:
+            data (dict): Order data
+        """
         # Broadcast the new order to all connected clients
         socketio.emit('order_update', data)
     
     @socketio.on('order_status_change')
     def handle_status_change(data):
+        """
+        Handle order status change
+        
+        Args:
+            data (dict): Status data
+        """
         # Broadcast the status change to all connected clients
         socketio.emit('order_update', data)
     
     @socketio.on('robot_location_update')
     def handle_robot_update(data):
+        """
+        Handle robot location update
+        
+        Args:
+            data (dict): Robot location data
+        """
         # Broadcast the robot location update to all connected clients
         socketio.emit('robot_update', data)
+        
+    @socketio.on_error()
+    def handle_error(e):
+        """Handle Socket.IO errors"""
+        print(f"Socket.IO error: {str(e)}")
+        
+    @socketio.on_error_default
+    def handle_default_error(e):
+        """Handle default Socket.IO errors"""
+        print(f"Socket.IO default error: {str(e)}")

@@ -235,9 +235,21 @@ def create_floating_chat():
         style={"display": "none"}  # Initially hidden, shown in expanded mode
     )
     
-    # Combine button, panel and hidden faq section
+     # Hidden div for Socket.IO communication
+    hidden_elements = html.Div([
+        # This is used to receive updates from Socket.IO
+        html.Div(id="floating-chat-socket-update", 
+                 **{"data-open-chat": False},  # For opening the chat panel
+                 style={"display": "none"}),
+        
+        # Status elements for debugging
+        html.Div(id="chat-connection-status", style={"display": "none"}),
+        html.Div(id="direct-message-status", style={"display": "none"})
+    ], style={"display": "none"})
+    
+    # Combine button, panel, hidden faq section, and hidden elements
     floating_chat = html.Div(
-        [chat_button, chat_panel, faq_section],
+        [chat_button, chat_panel, faq_section, hidden_elements],
         id="floating-chat-container"
     )
     

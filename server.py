@@ -1,12 +1,23 @@
-# File: app/server.py (Enhanced with debugging)
+# File: server.py (Enhanced with improved error handling)
 import uuid
 from flask import Flask, render_template, redirect, session, request, jsonify
 from datetime import datetime
+import time
 import requests
 import os
 from flask_socketio import SocketIO, emit
 import json
 
+# Error handler for Socket.IO
+def handle_socketio_error(e):
+    """
+    Handle Socket.IO errors gracefully
+    
+    Args:
+        e (Exception): The exception that was raised
+    """
+    print(f"Socket.IO error: {str(e)}")
+    # No need to re-raise, just log the error
 
 def configure_server(server, socketio):
     """
@@ -39,34 +50,6 @@ def configure_server(server, socketio):
         print(f"Rendering Chainlit embed with URL: {full_url}")
         return render_template('chainlit_embed.html', chainlit_url=full_url)
     
-    # API endpoints for Chainlit integration
-    @server.route('/api/place-order', methods=['POST'])
-    def place_order_api():
-        """API endpoint to place an order"""
-        try:
-            # Get order data from request
-            order_data = request.json
-            print(f"Received order data: {json.dumps(order_data)}")
-            
-            # Validate order data
-            if not order_data or 'items' not in order_data:
-                print("Invalid order data")
-                return jsonify({'status': 'error', 'message': 'Invalid order data'}), 400
-            
-            # Broadcast new order via SocketIO
-            print(f"Broadcasting new order via SocketIO: {order_data.get('id')}")
-            socketio.emit('new_order', order_data)
-            
-            return jsonify({
-                'status': 'success',
-                'message': 'Order placed successfully',
-                'order_id': order_data.get('id')
-            })
-        
-        except Exception as e:
-            print(f"Error in place_order_api: {str(e)}")
-            return jsonify({'status': 'error', 'message': str(e)}), 500
-    
     # Debug endpoint to check if server is responding
     @server.route('/api/ping', methods=['GET'])
     def ping():
@@ -85,9 +68,10 @@ def configure_server(server, socketio):
         return {'status': 'connected', 'sid': request.sid}
     
     @socketio.on('disconnect')
-    def handle_disconnect():
+    def handle_disconnect(sid=None):
         """Handle client disconnection"""
-        print(f'Client disconnected from Socket.IO: {request.sid}')
+        sid_value = sid or request.sid or "unknown"
+        print(f'Client disconnected from Socket.IO: {sid_value}')
     
     @socketio.on('ping')
     def handle_ping(data):
@@ -114,10 +98,10 @@ def configure_server(server, socketio):
                 'session_id': session_id
             }
             
-            # Emit to everyone, including sender (this is important)
-            socketio.emit('chat_message_from_dashboard', emit_data, broadcast=True, include_self=True)
+            # Emit to everyone
+            socketio.emit('chat_message_from_dashboard', emit_data, broadcast=True)
             
-            # For debugging - also emit to a topic the client might be listening on
+            # For debugging - also emit to update listener
             socketio.emit('update_chat_message_listener', json.dumps({
                 'type': 'user_message',
                 'message': message,
@@ -125,39 +109,72 @@ def configure_server(server, socketio):
             }))
             
             # Acknowledge receipt
-            return {'status': 'success', 'message': f'Message sent to Chainlit: {message}'}
+            return {'status': 'success', 'message': f'Message broadcast successfully: {message}'}
         except Exception as e:
             print(f"Error in handle_send_chat_message: {str(e)}")
             return {'status': 'error', 'message': str(e)}
     
-    @socketio.on('chainlit_message')
-    def handle_chainlit_message(data):
-        """Handle messages from Chainlit"""
+    # Add a new route to handle direct messages to Chainlit
+    @socketio.on('direct_message_to_chainlit')
+    def handle_direct_message(data):
+        """Handle direct messages to Chainlit"""
         try:
-            message_type = data.get('type')
+            message = data.get('message')
+            session_id = data.get('session_id', str(uuid.uuid4()))
             
-            print(f"Received message from Chainlit: {message_type}")
-            print(f"Full data: {json.dumps(data)}")
+            print(f"Received direct message for Chainlit: {message}")
             
-            # Forward the message to all clients
-            socketio.emit('update_chat_message_listener', json.dumps(data))
-            
-            # For demo purposes, log all events
-            socketio.emit('debug_log', {
-                'source': 'chainlit',
-                'type': message_type,
-                'data': data
+            # Broadcast to all clients to ensure the iframe gets it
+            socketio.emit('chat_message_from_dashboard', {
+                'message': message,
+                'session_id': session_id
             })
             
-            # Acknowledge receipt
-            return {'status': 'success', 'message': 'Message received from Chainlit'}
+            return {'status': 'success', 'message': 'Direct message sent'}
         except Exception as e:
-            print(f"Error in handle_chainlit_message: {str(e)}")
+            print(f"Error in handle_direct_message: {str(e)}")
             return {'status': 'error', 'message': str(e)}
     
+    # Handle messages from open_chat_panel
+    @socketio.on('open_chat_panel')
+    def handle_open_panel(data):
+        """Handle request to open chat panel"""
+        try:
+            message = data.get('message_sent')
+            print(f"Request to open chat panel received. Message to send: {message}")
+            
+            # Emit a special event to open the chat panel
+            socketio.emit('update_chat_message_listener', json.dumps({
+                'type': 'open_chat',
+                'message': message
+            }))
+            
+            # Also emit a general open_floating_chat event
+            socketio.emit('open_floating_chat', {'message': message})
+            
+            return {'status': 'success'}
+        except Exception as e:
+            print(f"Error in handle_open_panel: {str(e)}")
+            return {'status': 'error', 'message': str(e)}
+    
+    # Set up proper Socket.IO error handlers
     @socketio.on_error()
     def handle_error(e):
         """Handle Socket.IO errors"""
-        print(f"Socket.IO error: {str(e)}")
-
-# Import datetime only needed for the ping endpoint
+        handle_socketio_error(e)
+    
+    @socketio.on_error_default
+    def handle_default_error(e):
+        """Handle default Socket.IO errors"""
+        handle_socketio_error(e)
+    
+    # Error handler for specific events
+    @socketio.on_error('send_chat_message')
+    def handle_send_chat_message_error(e):
+        """Handle errors in send_chat_message event"""
+        handle_socketio_error(e)
+    
+    @socketio.on_error('direct_message_to_chainlit')
+    def handle_direct_message_error(e):
+        """Handle errors in direct_message_to_chainlit event"""
+        handle_socketio_error(e)

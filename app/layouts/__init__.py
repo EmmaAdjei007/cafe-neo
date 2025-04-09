@@ -155,7 +155,7 @@ def create_main_layout():
         html.Div(id='socket-chat-update', style={'display': 'none'}),
         
         # Add hidden divs for direct message support
-        html.Div(id='direct-message-status', style={'display': 'none'}),
+        # html.Div(id='direct-message-status', style={'display': 'none'}),
         html.Div(id='voice-status', style={'display': 'none'}),
         
         # Add stores and intervals

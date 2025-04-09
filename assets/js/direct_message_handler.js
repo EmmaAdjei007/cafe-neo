@@ -1,83 +1,100 @@
-// Create a new file: assets/js/direct_message_handler.js
-
 /**
- * Direct Message Handler
- * Handles messages directly between the dashboard and Chainlit
+ * Direct Message Handler for communicating with Chainlit iframe
+ * This file handles sending messages directly to the Chainlit iframe using postMessage
  */
 
-// Initialize when document is ready
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('Direct message handler initialized');
+(function() {
+    // Debug mode - set to true to see debug messages in console
+    const DEBUG = window.DEBUG_MODE || false;
     
-    // Connect to socket.io
-    if (typeof io !== 'undefined') {
-        const socket = io.connect();
+    // Debug log helper
+    function debugLog(...args) {
+        if (DEBUG) {
+            console.log('[DirectMessageHandler]', ...args);
+        }
+    }
+    
+    // Initialize when DOM is loaded
+    document.addEventListener('DOMContentLoaded', function() {
+        debugLog('Initializing Direct Message Handler');
         
-        // Log connection
-        socket.on('connect', function() {
-            console.log('Connected to Socket.IO for direct messaging');
-        });
+        // Store a reference to the Chainlit iframe
+        const getChainlitIframe = () => document.getElementById('floating-chainlit-frame');
         
-        // Handle open_chat_panel event
-        socket.on('open_chat_panel', function(data) {
-            console.log('Received open_chat_panel event:', data);
+        // Function to send message to the iframe
+        window.sendDirectMessageToChainlit = function(message) {
+            debugLog('Attempting to send message to Chainlit:', message);
             
-            // Find and click the chat button to open the panel
-            const chatButton = document.getElementById('floating-chat-button');
-            if (chatButton) {
-                console.log('Opening chat panel');
-                chatButton.click();
+            const iframe = getChainlitIframe();
+            if (!iframe) {
+                debugLog('Error: Chainlit iframe not found in DOM');
+                return false;
+            }
+            
+            try {
+                // Try to send via postMessage in the format Chainlit expects
+                iframe.contentWindow.postMessage({
+                    type: 'userMessage',
+                    message: message
+                }, '*');
+                
+                // Also try older/alternate Chainlit format as fallback
+                iframe.contentWindow.postMessage({
+                    kind: 'user_message',
+                    data: {
+                        content: message
+                    }
+                }, '*');
+                
+                debugLog('Message sent via postMessage');
+                return true;
+            } catch (e) {
+                debugLog('Error sending via postMessage:', e);
+                return false;
+            }
+        };
+        
+        // Function to open the chat panel and send a message
+        window.sendAndOpenChat = function(message) {
+            debugLog('Opening chat panel and sending message:', message);
+            
+            // First make sure the chat panel is visible
+            const chatPanel = document.getElementById('floating-chat-panel');
+            if (chatPanel) {
+                // Show the panel
+                chatPanel.style.display = 'flex';
+                
+                // Set a class to ensure it's fully visible
+                chatPanel.className = 'floating-chat-panel';
+                
+                // Create a small delay to ensure the iframe is loaded
+                setTimeout(() => {
+                    window.sendDirectMessageToChainlit(message);
+                }, 500);
+                
+                return true;
+            }
+            
+            debugLog('Error: Chat panel not found');
+            return false;
+        };
+        
+        // Listen for messages from the iframe
+        window.addEventListener('message', function(event) {
+            // Filter messages from the Chainlit iframe
+            const iframe = getChainlitIframe();
+            if (iframe && event.source === iframe.contentWindow) {
+                debugLog('Received message from Chainlit iframe:', event.data);
+                
+                // Process specific message types
+                if (event.data && event.data.type === 'navigation') {
+                    debugLog('Navigation requested:', event.data.destination);
+                    // Handle navigation requests from the iframe
+                    if (event.data.destination) {
+                        window.location.href = '/' + event.data.destination;
+                    }
+                }
             }
         });
-        
-        // Handle direct message events
-        socket.on('chat_message_from_dashboard', function(data) {
-            console.log('Received direct message from dashboard:', data);
-            
-            // Wait a moment for the panel to open if needed
-            setTimeout(function() {
-                forwardMessageToChainlit(data.message);
-            }, 500);
-        });
-        
-        // Handle voice toggle
-        socket.on('toggle_voice_mode', function(data) {
-            console.log('Received voice toggle event:', data);
-            
-            // Here you would toggle voice mode if implemented
-        });
-    } else {
-        console.error('Socket.IO not available for direct message handler');
-    }
-    
-    // Function to forward message to Chainlit
-    function forwardMessageToChainlit(message) {
-        console.log('Forwarding message to Chainlit:', message);
-        
-        // Find the Chainlit iframe
-        const iframe = document.getElementById('floating-chainlit-frame');
-        if (!iframe) {
-            console.error('Chainlit iframe not found');
-            return false;
-        }
-        
-        try {
-            // Method 1: Post a message to the iframe
-            iframe.contentWindow.postMessage({
-                type: 'direct_message',
-                message: message
-            }, '*');
-            
-            // Method 2: Use the chat_message_from_dashboard event which may be handled in the iframe
-            const chatEvent = new CustomEvent('chat_message_from_dashboard', { 
-                detail: { message: message } 
-            });
-            iframe.dispatchEvent(chatEvent);
-            
-            return true;
-        } catch (error) {
-            console.error('Error forwarding message to Chainlit:', error);
-            return false;
-        }
-    }
-});
+    });
+})();

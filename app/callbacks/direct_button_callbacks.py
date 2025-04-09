@@ -68,46 +68,89 @@ def register_callbacks(app, socketio):
         # Create a session ID
         session_id = str(uuid.uuid4())
         
-        # Send message via bridge
-        try:
-            # Use MessageBridge if available
-            result = MessageBridge.send_message(message, session_id)
-            print(f"Message sent via bridge: {message}")
-        except Exception as e:
-            print(f"Error sending message via bridge: {e}")
-            result = {"status": "error", "error": str(e)}
+        # Create a JavaScript code to trigger the client-side message sending
+        js_code = f'''
+        if (document.getElementById('floating-chat-panel')) {{
+            // Make sure the panel is visible
+            document.getElementById('floating-chat-panel').style.display = 'flex';
+            document.getElementById('floating-chat-panel').className = 'floating-chat-panel';
             
-            # Fallback to socket.io directly
-            try:
-                # Emit directly to socket.io
-                socketio.emit('chat_message_from_dashboard', {
-                    'message': message,
-                    'session_id': session_id
-                })
-                print(f"Message sent via socket.io: {message}")
-                result = {"status": "success", "method": "socket.io"}
-            except Exception as socket_err:
-                print(f"Error sending via socket.io: {socket_err}")
+            // Wait a short while for the panel to be visible
+            setTimeout(function() {{
+                const message = "{message}";
+                
+                // Try using our direct message sender if available
+                if (window.sendDirectMessageToChainlit) {{
+                    console.log("Sending via sendDirectMessageToChainlit:", message);
+                    window.sendDirectMessageToChainlit(message);
+                }}
+                
+                // Also try using chatClient as a backup
+                if (window.chatClient && window.chatClient.sendMessage) {{
+                    console.log("Sending via chatClient:", message);
+                    window.chatClient.sendMessage(message);
+                }}
+                
+                // Also try direct postMessage to the iframe as a last resort
+                try {{
+                    const iframe = document.getElementById('floating-chainlit-frame');
+                    if (iframe && iframe.contentWindow) {{
+                        console.log("Sending via direct postMessage:", message);
+                        iframe.contentWindow.postMessage({{
+                            type: 'userMessage',
+                            message: message
+                        }}, '*');
+                    }}
+                }} catch(e) {{
+                    console.error("Error sending via postMessage:", e);
+                }}
+            }}, 500);
+        }}
+        '''
         
-        # Emit socket event to trigger panel opening if needed
+        # Execute the JavaScript
+        app.clientside_callback(
+            js_code,
+            Output('direct-message-status', 'className', allow_duplicate=True),
+            Input('direct-message-status', 'children'),
+            prevent_initial_call=True
+        )
+        
+        # Attempt all methods to send the message
+        methods_attempted = []
+        
+        # Method 1: Try via Socket.IO
+        try:
+            socketio.emit('chat_message_from_dashboard', {
+                'message': message,
+                'session_id': session_id
+            })
+            print(f"Message sent via socket.io: {message}")
+            methods_attempted.append("socket.io")
+        except Exception as e:
+            print(f"Error sending via socket.io: {e}")
+        
+        # Method 2: Try via MessageBridge (file-based approach)
+        try:
+            result = MessageBridge.send_message(message, session_id)
+            if result.get('status') == 'success':
+                print(f"Message sent via bridge: {message}")
+                methods_attempted.append("message_bridge")
+        except Exception as e:
+            print(f"Error sending via bridge: {e}")
+        
+        # Method 3: If panel is hidden, emit event to open it
         if is_panel_hidden:
-            # Tell the client to open the chat panel
-            socketio.emit('open_chat_panel', {'message_sent': message})
-            print(f"Emitted open_chat_panel event")
+            try:
+                socketio.emit('open_chat_panel', {
+                    'message_sent': message
+                })
+                methods_attempted.append("open_panel")
+            except Exception as e:
+                print(f"Error opening chat panel: {e}")
         
-        # Also emit a chat message event for redundancy
-        socketio.emit('chat_message_from_dashboard', {
-            'message': message,
-            'session_id': session_id
-        })
-        
-        # Return status (hidden element)
-        return json.dumps({
-            'button': triggered_id,
-            'message': message,
-            'status': result.get('status', 'unknown'),
-            'timestamp': time.time()
-        })
+        # Return status as a string message
+        return message
     
     # Special case for voice toggle button
     @app.callback(
@@ -121,8 +164,11 @@ def register_callbacks(app, socketio):
             return no_update
         
         # Emit socket event for voice toggle
-        socketio.emit('toggle_voice_mode', {
-            'enabled': True  # Toggle to enabled state
-        })
-        
-        return "Voice toggled"
+        try:
+            socketio.emit('toggle_voice_mode', {
+                'enabled': True  # Toggle to enabled state
+            })
+            return "Voice toggled"
+        except Exception as e:
+            print(f"Error toggling voice: {e}")
+            return "Voice toggle failed"

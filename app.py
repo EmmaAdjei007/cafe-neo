@@ -55,6 +55,7 @@ external_scripts = [
     '/assets/js/chat_client.js',  # Add chat client JS
     '/assets/js/clientside.js' ,   # Add clientside JS
     'assets/js/direct_message_handler.js',  # Add direct message handler JS
+    '/assets/js/chat_messenger.js',  # Add chat messenger JS
 ]
 
 app = Dash(__name__, 

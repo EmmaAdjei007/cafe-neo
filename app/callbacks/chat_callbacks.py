@@ -42,7 +42,8 @@ def register_callbacks(app, socketio):
         [
             Input('floating-chat-button', 'n_clicks'),
             Input('close-chat-button', 'n_clicks'),
-            Input('minimize-chat-button', 'n_clicks')
+            Input('minimize-chat-button', 'n_clicks'),
+            Input('floating-chat-socket-update', 'data-open-chat')  # Updated ID
         ],
         [
             State('floating-chat-panel', 'style'),
@@ -50,7 +51,7 @@ def register_callbacks(app, socketio):
             State('chat-faq-section', 'style')
         ]
     )
-    def toggle_chat_panel(open_clicks, close_clicks, minimize_clicks, 
+    def toggle_chat_panel(open_clicks, close_clicks, minimize_clicks, open_chat_data,
                         current_style, current_class, faq_style):
         """Toggle the floating chat panel visibility and state"""
         ctx = callback_context
@@ -78,6 +79,11 @@ def register_callbacks(app, socketio):
         # FAQ section visibility
         show_faq = {"display": "block"}
         hide_faq = {"display": "none"}
+        
+        # Socket.IO triggered open
+        if button_id == 'socket-chat-update' and open_chat_data:
+            # Socket.IO is requesting to open the chat
+            return visible_style, base_class, hide_faq
         
         # FIXED LOGIC FOR EACH BUTTON
         if button_id == "floating-chat-button":
@@ -158,6 +164,9 @@ def register_callbacks(app, socketio):
             session['session_id'] = session_id
             query_params['session_id'] = session_id
         
+        # Add timestamp to prevent caching
+        query_params['t'] = str(int(time.time()))
+        
         # Build query string
         query_string = urllib.parse.urlencode(query_params)
         
@@ -220,14 +229,61 @@ def register_callbacks(app, socketio):
             # Get the message for this button
             message = message_map[button_id]
             
+            # Create JavaScript to execute in the client
+            js_code = f'''
+            if (document.getElementById('floating-chat-panel')) {{
+                // Make sure the panel is visible
+                document.getElementById('floating-chat-panel').style.display = 'flex';
+                document.getElementById('floating-chat-panel').className = 'floating-chat-panel';
+                
+                // Wait a short while for the panel to be visible
+                setTimeout(function() {{
+                    const message = "{message}";
+                    
+                    // Try using our direct message sender if available
+                    if (window.sendDirectMessageToChainlit) {{
+                        console.log("Sending via sendDirectMessageToChainlit:", message);
+                        window.sendDirectMessageToChainlit(message);
+                    }}
+                    
+                    // Also try using chatClient as a backup
+                    if (window.chatClient && window.chatClient.sendMessage) {{
+                        console.log("Sending via chatClient:", message);
+                        window.chatClient.sendMessage(message);
+                    }}
+                    
+                    // Also try direct postMessage to the iframe as a last resort
+                    try {{
+                        const iframe = document.getElementById('floating-chainlit-frame');
+                        if (iframe && iframe.contentWindow) {{
+                            console.log("Sending via direct postMessage:", message);
+                            iframe.contentWindow.postMessage({{
+                                type: 'userMessage',
+                                message: message
+                            }}, '*');
+                        }}
+                    }} catch(e) {{
+                        console.error("Error sending via postMessage:", e);
+                    }}
+                }}, 500);
+            }}
+            '''
+            
+            # Execute the JavaScript
+            app.clientside_callback(
+                js_code,
+                Output('chat-action-trigger', 'className', allow_duplicate=True),
+                Input('chat-action-trigger', 'children'),
+                prevent_initial_call=True
+            )
+            
             # Get or create session ID
             session_id = session.get('session_id')
             if not session_id:
                 session_id = get_chainlit_session()
                 session['session_id'] = session_id
             
-            # Send message to Chainlit via SocketIO
-            # This is the recommended approach for Chainlit communication
+            # Send message to Chainlit via SocketIO (server-side)
             try:
                 socketio.emit('send_chat_message', {
                     'message': message,
@@ -335,86 +391,26 @@ def register_callbacks(app, socketio):
             print(f"Error handling chat navigation: {e}")
             return dash.no_update
 
-    # Set up Socket.IO event handlers
-    @socketio.on('connect')
-    def handle_connect():
-        """Handle client connection"""
-        print('Client connected to Socket.IO')
-    
-    @socketio.on('disconnect')
-    def handle_disconnect():
-        """Handle client disconnection"""
-        print('Client disconnected from Socket.IO')
-    
-    @socketio.on('send_chat_message')
-    def handle_send_chat_message(data):
-        """
-        Handle message sending from dashboard to Chainlit
+    # Set up a callback to handle open_floating_chat events
+    @app.callback(
+        Output('socket-chat-update', 'data-open-chat'),
+        [Input('socket-chat-update', 'data')],
+        prevent_initial_call=True
+    )
+    def handle_open_chat_event(data):
+        """Handle open chat events from Socket.IO"""
+        if data:
+            try:
+                parsed_data = json.loads(data)
+                if parsed_data.get('type') == 'open_chat':
+                    return True
+            except Exception as e:
+                print(f"Error parsing socket data: {e}")
         
-        Args:
-            data (dict): Message data
-        """
-        message = data.get('message')
-        session_id = data.get('session_id')
-        
-        print(f"Received message to send to Chainlit: {message}")
-        
-        # Forward the message to all clients (including the Chainlit iframe)
-        socketio.emit('chat_message_from_dashboard', {
-            'message': message,
-            'session_id': session_id
-        })
-        
-        # Acknowledge receipt
-        return {'status': 'success', 'message': 'Message received and forwarded'}
+        return dash.no_update
 
-    # Handle messages from Chainlit via socket.io
-    @socketio.on('chainlit_message')
-    def handle_chainlit_message(data):
-        """
-        Handle messages from Chainlit
-        
-        Args:
-            data (dict): Message data from Chainlit
-        """
-        message_type = data.get('type')
-        
-        print(f"Received message from Chainlit: {message_type}")
-        
-        if message_type == 'order_update':
-            # Order update from Chainlit
-            order_data = data.get('order')
-            
-            if order_data:
-                # Broadcast to all clients
-                socketio.emit('order_update', order_data)
-                
-                # Update hidden div for triggering callbacks
-                socketio.emit('update_chat_message_listener', json.dumps(data))
-                
-                # In a real app, would also update database
-                print(f"Order update from Chainlit: {order_data['id']}")
-        
-        elif message_type == 'navigation':
-            # Navigation request from Chainlit
-            destination = data.get('destination')
-            
-            # Broadcast to all clients
-            socketio.emit('update_chat_message_listener', json.dumps(data))
-            
-            print(f"Navigation request from Chainlit: {destination}")
-        
-        elif message_type == 'voice_update':
-            # Voice mode toggled in Chainlit
-            voice_enabled = data.get('enabled', False)
-            
-            # Broadcast to all clients
-            socketio.emit('voice_update', {'enabled': voice_enabled})
-            
-            print(f"Voice mode {'enabled' if voice_enabled else 'disabled'} from Chainlit")
-        
-        # Acknowledge receipt
-        return {'status': 'success', 'message': 'Message received'}
+    # Import time for use in callback
+    import time
 
 
 # Helper function for order status colors
