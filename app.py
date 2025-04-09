@@ -2,6 +2,10 @@
 
 import sys
 import os
+
+# Get Chainlit URL from environment variables or use default
+CHAINLIT_URL = os.environ.get('CHAINLIT_URL', 'http://localhost:8000')
+
 from dash import Dash, dcc, html
 import dash_bootstrap_components as dbc
 from flask import Flask
@@ -24,9 +28,6 @@ from app.layouts import create_main_layout
 from app.callbacks import register_all_callbacks
 from app.config import config
 from server import configure_server
-
-# Get Chainlit URL from environment variables or use default
-CHAINLIT_URL = os.environ.get('CHAINLIT_URL', 'http://localhost:8001')
 
 # Initialize Flask and SocketIO with proper config
 server = Flask(__name__, 
@@ -52,7 +53,8 @@ external_stylesheets = [
 
 external_scripts = [
     '/assets/js/chat_client.js',  # Add chat client JS
-    '/assets/js/clientside.js'    # Add clientside JS
+    '/assets/js/clientside.js' ,   # Add clientside JS
+    'assets/js/direct_message_handler.js',  # Add direct message handler JS
 ]
 
 app = Dash(__name__, 

@@ -73,100 +73,55 @@
         let iframeLoaded = false;
         let frameLoadTimeout = null;
         
-        // Function to send message to Chainlit iframe
-        window.sendMessageToChainlit = function(message) {
-            const iframe = document.getElementById('chatframe');
-            if (!iframe || !iframe.contentWindow) {
-                debugLog('Iframe not available for sending message');
-                return false;
-            }
-            
-            if (!iframeLoaded) {
-                debugLog('Iframe not loaded yet, queueing message:', message);
-                
-                // Queue the message to send after load
-                setTimeout(() => {
-                    if (iframeLoaded) {
-                        sendMessageToChainlit(message);
-                    }
-                }, 1000);
-                
-                return false;
-            }
-            
-            debugLog('Sending message to Chainlit iframe:', message);
-            
-            // Try multiple message formats to ensure compatibility
-            const messageFormats = [
-                // Format 1: Standard userMessage format
-                {
-                    type: 'userMessage',
-                    message: message
-                },
-                // Format 2: Direct message format
-                {
-                    message: message,
-                    type: 'message'
-                },
-                // Format 3: Chat message format
-                {
-                    type: 'chat_message',
-                    content: message
-                },
-                // Format 4: Raw text format
-                message
-            ];
-            
-            // Try each format
-            let success = false;
-            
-            messageFormats.forEach(format => {
-                try {
-                    iframe.contentWindow.postMessage(format, '*');
-                    success = true;
-                } catch (e) {
-                    debugLog('Error sending message format:', e);
-                }
-            });
-            
-            return success;
-        };
-        
-        // Handle postMessage communication from parent window
+        // Handle direct messages from the parent window
         window.addEventListener('message', function(event) {
             // Only accept messages from the parent window
             if (event.source === window.parent) {
                 debugLog('Received message from parent:', event.data);
                 
-                // Handle message formats
-                if (typeof event.data === 'string') {
-                    // Direct string message
-                    sendMessageToChainlit(event.data);
-                }
-                else if (event.data && event.data.message) {
-                    // Object with message property
-                    sendMessageToChainlit(event.data.message);
-                }
-                else if (event.data && event.data.type === 'userMessage' && event.data.message) {
-                    // Standard userMessage format
-                    sendMessageToChainlit(event.data.message);
-                }
-                else if (event.data && event.data.type === 'sendMessage' && event.data.message) {
-                    // Sending message command
-                    sendMessageToChainlit(event.data.message);
+                // Check if it's a direct message
+                if (event.data && (event.data.type === 'direct_message' || event.data.message)) {
+                    const message = event.data.message || event.data;
+                    debugLog('Processing direct message:', message);
+                    
+                    // Wait until iframe is loaded
+                    if (!iframeLoaded) {
+                        debugLog('Iframe not loaded yet, waiting...');
+                        setTimeout(() => {
+                            sendToChainlit(message);
+                        }, 1000);
+                        return;
+                    }
+                    
+                    sendToChainlit(message);
                 }
             }
         });
         
-        // Forward messages from Chainlit iframe to parent
-        window.addEventListener('message', function(event) {
+        // Function to send message to Chainlit
+        function sendToChainlit(message) {
+            debugLog('Sending to Chainlit:', message);
+            
             const iframe = document.getElementById('chatframe');
-            if (iframe && event.source === iframe.contentWindow) {
-                // Send the message to the parent window
-                debugLog('Forwarding message to parent:', event.data);
-                window.parent.postMessage(event.data, '*');
+            if (!iframe || !iframe.contentWindow) {
+                debugLog('Iframe not accessible');
+                return false;
             }
-        });
+            
+            try {
+                // Try to send via postMessage
+                iframe.contentWindow.postMessage({
+                    type: 'userMessage',
+                    message: message
+                }, '*');
+                
+                debugLog('Message sent via postMessage');
+                return true;
+            } catch (e) {
+                debugLog('Error sending via postMessage:', e);
+                return false;
+            }
+        }
         
         // Handle iframe load event
         document.getElementById('chatframe').onload = function() {
@@ -192,6 +147,9 @@
                 document.getElementById('error-message').style.display = 'block';
             }
         }, 10000); // 10 second timeout
+        
+        // Create global function for direct access
+        window.sendMessage = sendToChainlit;
     </script>
 </body>
 </html>

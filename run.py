@@ -11,17 +11,25 @@ import os
 import signal
 import sys
 
+# Set different ports for Dash and Chainlit
+DASH_PORT = 8050
+CHAINLIT_PORT = 8000
+
+# Set environment variables for communication
+os.environ['CHAINLIT_URL'] = f'http://localhost:{CHAINLIT_PORT}'
+os.environ['DASHBOARD_URL'] = f'http://localhost:{DASH_PORT}'
+
 def run_dash():
     """Run the Dash application"""
-    print("Starting Dash application...")
+    print(f"Starting Dash application on port {DASH_PORT}...")
     dash_process = subprocess.Popen(["python", "app.py"])
     return dash_process
 
 def run_chainlit():
     """Run the Chainlit application"""
-    print("Starting Chainlit application...")
+    print(f"Starting Chainlit application on port {CHAINLIT_PORT}...")
     os.chdir("chainlit_app")
-    chainlit_process = subprocess.Popen(["chainlit", "run", "app.py", "--port", "8000"])
+    chainlit_process = subprocess.Popen(["chainlit", "run", "app.py", "--port", str(CHAINLIT_PORT)])
     os.chdir("..")
     return chainlit_process
 
@@ -48,8 +56,8 @@ def main():
     
     # Wait for processes to complete (they won't unless terminated)
     print("\nBoth applications are running!")
-    print("Visit http://localhost:8050 for the Dash app")
-    print("Visit http://localhost:8000 for the Chainlit app directly")
+    print(f"Visit http://localhost:{DASH_PORT} for the Dash app")
+    print(f"Visit http://localhost:{CHAINLIT_PORT} for the Chainlit app directly")
     print("\nPress Ctrl+C to stop both applications")
     
     try:
