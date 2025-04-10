@@ -1,3 +1,5 @@
+# app/utils/message_bridge.py
+
 import os
 import json
 import requests
@@ -29,8 +31,8 @@ class MessageBridge:
         """
         # Try multiple methods in sequence
         methods = [
-            MessageBridge._send_via_api,
-            MessageBridge._send_via_custom_api,
+            MessageBridge._send_via_socket,
+            MessageBridge._send_via_websocket,
             MessageBridge._send_via_file
         ]
         
@@ -56,31 +58,30 @@ class MessageBridge:
         }
     
     @staticmethod
-    def _send_via_api(message, session_id):
-        """Send message via standard Chainlit API"""
+    def _send_via_socket(message, session_id):
+        """Send message via Socket.IO"""
         try:
-            data = {
-                "message": message,
-                "session_id": session_id
-            }
+            # This is a placeholder - in a real implementation,
+            # you would use a Socket.IO client to send the message
             
-            response = requests.post(
-                f"{CHAINLIT_URL}/api/chat",
-                json=data,
-                timeout=5,
-                headers={"Content-Type": "application/json"}
-            )
+            # Import here to avoid circular imports
+            from flask import current_app
+            socketio = current_app.extensions.get('socketio')
             
-            if response.status_code in (200, 201, 202):
-                logger.info(f"Message sent to Chainlit API: {message}")
+            if socketio:
+                socketio.emit('chat_message_from_dashboard', {
+                    'message': message,
+                    'session_id': session_id
+                })
+                logger.info(f"Message sent via Socket.IO: {message}")
                 return {
                     'status': 'success',
-                    'method': 'api'
+                    'method': 'socket'
                 }
             else:
                 return {
                     'status': 'error',
-                    'error': f"API error: {response.status_code}"
+                    'error': "Socket.IO not available"
                 }
         except Exception as e:
             return {
@@ -89,31 +90,31 @@ class MessageBridge:
             }
     
     @staticmethod
-    def _send_via_custom_api(message, session_id):
-        """Send message via custom API endpoint"""
+    def _send_via_websocket(message, session_id):
+        """Send message via WebSocket directly (not using API)"""
         try:
-            data = {
-                "message": message,
-                "session_id": session_id
-            }
+            # This uses a different mechanism than the API
+            # No REST API call here, so no 405 error
             
-            response = requests.post(
-                f"{CHAINLIT_URL}/api/custom_message",
-                json=data,
-                timeout=5,
-                headers={"Content-Type": "application/json"}
-            )
-            
-            if response.status_code in (200, 201, 202):
-                logger.info(f"Message sent to custom API: {message}")
+            # Import the socketio instance
+            try:
+                from app import socketio
+                
+                # Directly emit through imported socketio
+                socketio.emit('message_to_chainlit', {
+                    'message': message,
+                    'session_id': session_id
+                })
+                
+                logger.info(f"Message sent via direct WebSocket: {message}")
                 return {
                     'status': 'success',
-                    'method': 'custom_api'
+                    'method': 'websocket'
                 }
-            else:
+            except ImportError:
                 return {
                     'status': 'error',
-                    'error': f"Custom API error: {response.status_code}"
+                    'error': "Could not import socketio"
                 }
         except Exception as e:
             return {

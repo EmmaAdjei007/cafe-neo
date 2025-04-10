@@ -1,7 +1,9 @@
-# File: app/callbacks/navigation_callbacks.py (Updated)
+# Updated app/callbacks/navigation_callbacks.py
+
 import dash
 from dash import Input, Output, State, callback_context, dcc, html
 import dash_bootstrap_components as dbc
+import json
 
 def register_callbacks(app):
     """
@@ -82,6 +84,68 @@ def register_callbacks(app):
             dbc.Button('Return Home', href='/', color='primary')
         ]), tab_content, active_tab, new_chat_style
     
+    # New callback to handle navigation requests from the chatbot
+    @app.callback(
+        Output('url', 'pathname', allow_duplicate=True),
+        [Input('navigation-trigger', 'children')],
+        prevent_initial_call=True
+    )
+    def handle_chat_navigation(trigger_data):
+        """Handle navigation requests from the chatbot"""
+        if not trigger_data:
+            return dash.no_update
+        
+        try:
+            # Try to parse as JSON
+            data = json.loads(trigger_data)
+            
+            # Check if it's a valid navigation request
+            if isinstance(data, dict) and data.get('type') == 'navigation':
+                destination = data.get('destination')
+                
+                # Map destination to URL
+                url_map = {
+                    'menu': '/menu',
+                    'orders': '/orders',
+                    'delivery': '/delivery',
+                    'profile': '/profile',
+                    'dashboard': '/dashboard',
+                    'home': '/'
+                }
+                
+                # Navigate to the appropriate URL
+                if destination in url_map:
+                    return url_map[destination]
+            
+            # Not a valid navigation request
+            return dash.no_update
+        except:
+            # Error parsing JSON
+            return dash.no_update
+            
+    @app.callback(
+        Output('navigation-trigger', 'children'),
+        [Input('socket-chat-update', 'children')]
+    )
+    def update_navigation_trigger(socket_data):
+        """Update navigation trigger when socket data is received"""
+        if not socket_data:
+            return dash.no_update
+            
+        try:
+            # Try to parse as JSON
+            data = json.loads(socket_data)
+            
+            # Check if it's a navigation message
+            if isinstance(data, dict) and data.get('type') == 'navigation':
+                return socket_data
+            
+            # Not a navigation message
+            return dash.no_update
+        except:
+            # Error parsing JSON
+            return dash.no_update
+    
     @app.callback(
         Output('navbar-collapse', 'is_open'),
         [Input('navbar-toggler', 'n_clicks')],
@@ -94,7 +158,7 @@ def register_callbacks(app):
         return is_open
     
     @app.callback(
-        [Output(f"{page}-link", "active") for page in ["dashboard", "menu", "orders", "delivery"]],  # Removed chat
+        [Output(f"{page}-link", "active") for page in ["dashboard", "menu", "orders", "delivery"]],
         [Input("url", "pathname")]
     )
     def set_active_link(pathname):

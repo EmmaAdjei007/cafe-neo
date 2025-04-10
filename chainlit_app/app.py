@@ -1,176 +1,383 @@
-"""
-Enhanced Chainlit integration for Neo Cafe with reliable communication and intelligent processing
-"""
+# chainlit_app/app.py
 import os
 import sys
 import json
 import time
 import urllib.parse
 import requests
-import asyncio
 from typing import Dict, List, Optional
 from datetime import datetime
-import re
 
 import chainlit as cl
 from chainlit.element import Element
+from langchain.chains import ConversationalRetrievalChain
+from langchain.vectorstores import FAISS
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.memory import ConversationBufferMemory
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts import PromptTemplate
+from langchain.agents import initialize_agent, Tool
+from langchain.agents import AgentType
 
 # Add parent directory to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-# Import state management classes
-from chainlit_app.states import VoiceState, OrderState, RobotState
 
 # Constants
 DASHBOARD_URL = os.environ.get('DASHBOARD_URL', 'http://localhost:8050')
 ROBOT_SIMULATOR_URL = os.environ.get('ROBOT_SIMULATOR_URL', 'http://localhost:8051')
 
 # Global variables
-menu_items = []  # Will be populated in the on_chat_start function
 is_floating_chat = False  # Flag to check if running in floating mode
+menu_items = []  # Will be populated in the on_chat_start function
 processed_message_ids = set()  # Track processed message IDs to avoid duplicates
 
-# ----- Helper Functions -----
+# ----- Knowledge Base Setup -----
 
-def analyze_intent_rule_based(message: str) -> Dict:
+def create_knowledge_base():
     """
-    Analyze user intent using rule-based approach
+    Create vector store knowledge base for menu items and other information
+    
+    Returns:
+        FAISS: Vector store
+    """
+    # Load menu data
+    menu_data = load_menu_data()
+    global menu_items
+    menu_items = menu_data
+    
+    # Prepare text chunks for vector store
+    documents = []
+    for item in menu_data:
+        # Create menu item document
+        doc_text = f"Menu Item: {item['name']}\n"
+        doc_text += f"Description: {item['description']}\n"
+        doc_text += f"Price: ${item['price']:.2f}\n"
+        doc_text += f"Category: {item['category']}\n"
+        doc_text += f"Dietary Info: "
+        dietary = []
+        if item.get('vegetarian'):
+            dietary.append('Vegetarian')
+        if item.get('vegan'):
+            dietary.append('Vegan')
+        if item.get('gluten_free'):
+            dietary.append('Gluten-Free')
+        doc_text += ', '.join(dietary) if dietary else 'None specified'
+        
+        # Add as document
+        documents.append(doc_text)
+    
+    # Add operating hours and general info
+    documents.append("""
+    Operating Hours:
+    Monday - Friday: 7:00 AM to 8:00 PM
+    Saturday - Sunday: 8:00 AM to 6:00 PM
+    
+    Location:
+    123 Coffee Street, Downtown
+    
+    Contact:
+    Phone: (555) 123-4567
+    Email: info@neocafe.com
+    """)
+    
+    # Add ordering process info
+    documents.append("""
+    How to Order:
+    1. Browse the menu and select your items
+    2. Add items to your cart
+    3. Specify delivery location (table or address)
+    4. Add any special instructions
+    5. Confirm your order
+    6. Track your order status in real-time
+    
+    Payment Methods:
+    - Credit Card
+    - Cash
+    - Mobile Payment
+    """)
+    
+    # Create vector store from documents
+    embeddings = OpenAIEmbeddings()
+    vector_store = FAISS.from_texts(documents, embeddings)
+    
+    return vector_store
+
+def load_menu_data():
+    """
+    Load menu data from menu.json
+    
+    Returns:
+        list: Menu items
+    """
+    try:
+        # Try multiple possible paths for the menu file
+        possible_paths = [
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app', 'data', 'seed_data', 'menu.json'),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'seed_data', 'menu.json'),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'menu.json')
+        ]
+        
+        # Try each path
+        for menu_path in possible_paths:
+            if os.path.exists(menu_path):
+                print(f"Found menu file at: {menu_path}")
+                with open(menu_path, 'r') as f:
+                    return json.load(f)
+        
+        # Return a fallback menu with some basic items if no file found
+        print("Warning: Could not find menu.json, using fallback menu")
+        return [
+            {
+                "id": 1,
+                "name": "Espresso",
+                "description": "Rich and complex espresso with notes of cocoa and caramel.",
+                "price": 2.95,
+                "category": "coffee",
+                "popular": True
+            },
+            {
+                "id": 2,
+                "name": "Latte",
+                "description": "Smooth espresso with steamed milk and a light layer of foam.",
+                "price": 4.50,
+                "category": "coffee",
+                "popular": True
+            },
+            {
+                "id": 3,
+                "name": "Cappuccino",
+                "description": "Espresso with steamed milk and a deep layer of foam.",
+                "price": 4.25,
+                "category": "coffee",
+                "popular": True
+            },
+            {
+                "id": 7,
+                "name": "Croissant",
+                "description": "Buttery, flaky pastry made with pure butter.",
+                "price": 3.25,
+                "category": "pastries",
+                "popular": True
+            }
+        ]
+            
+    except Exception as e:
+        print(f"Error loading menu data: {e}")
+        return []
+
+# ----- API Integration Tools -----
+
+def navigate_to_page(destination):
+    """
+    Send navigation request to the Dash app
     
     Args:
-        message (str): User message
+        destination (str): Navigation destination
         
     Returns:
-        dict: Intent analysis
+        str: Response message
     """
-    message_lower = message.lower()
-    
-    # Initialize result
-    result = {
-        "intent": "casual",
-        "entities": {},
-        "confidence": 0.7,
-        "navigate_to": None
-    }
-    
-    # Check for greetings
-    greeting_patterns = ["hello", "hi ", "hey", "greetings", "morning", "afternoon", "evening"]
-    if any(pattern in message_lower for pattern in greeting_patterns):
-        result["intent"] = "greeting"
-        result["confidence"] = 0.9
-    
-    # Check for menu-related intents
-    menu_patterns = ["menu", "what do you have", "what do you offer", "show me", "what can i order", "what's available"]
-    if any(pattern in message_lower for pattern in menu_patterns):
-        result["intent"] = "menu"
-        result["confidence"] = 0.85
-        result["navigate_to"] = "menu"
-    
-    # Check for specific menu items
-    menu_items_global = ["coffee", "latte", "espresso", "cappuccino", "mocha", "tea", "sandwich", "croissant", "muffin", "pastry"]
-    found_items = [item for item in menu_items_global if item in message_lower]
-    if found_items:
-        result["entities"]["menu_items"] = found_items
-        if "order" in message_lower or any(word in message_lower for word in ["get", "have", "want", "like", "give"]):
-            result["intent"] = "order"
-            result["confidence"] = 0.8
-    
-    # Check for ordering intent
-    order_patterns = ["order", "buy", "purchase", "get me", "i'd like", "i want", "i'll have", "add to my order", "add to cart"]
-    if any(pattern in message_lower for pattern in order_patterns):
-        result["intent"] = "order"
-        result["confidence"] = 0.85
-        result["navigate_to"] = "orders"
-    
-    # Check for order status intent
-    status_patterns = ["status", "where is my order", "how long", "track", "follow", "my order"]
-    if any(pattern in message_lower for pattern in status_patterns):
-        result["intent"] = "order_status"
-        result["confidence"] = 0.8
-        result["navigate_to"] = "orders"
-    
-    # Check for robot status intent
-    robot_patterns = ["robot", "delivery", "deliveries", "where is the robot", "delivery status"]
-    if any(pattern in message_lower for pattern in robot_patterns):
-        result["intent"] = "robot_status"
-        result["confidence"] = 0.8
-        result["navigate_to"] = "delivery"
-    
-    # Check for profile intent
-    profile_patterns = ["profile", "account", "my information", "my details", "settings"]
-    if any(pattern in message_lower for pattern in profile_patterns):
-        result["intent"] = "profile"
-        result["confidence"] = 0.85
-        result["navigate_to"] = "profile"
-    
-    # Check for help intent
-    help_patterns = ["help", "support", "assist", "how do i", "how to", "guide"]
-    if any(pattern in message_lower for pattern in help_patterns):
-        result["intent"] = "help"
-        result["confidence"] = 0.8
-    
-    # Check for hours intent
-    hours_patterns = ["hours", "open", "close", "when", "time", "operating"]
-    if any(pattern in message_lower for pattern in hours_patterns):
-        result["intent"] = "hours"
-        result["confidence"] = 0.8
-    
-    # Extract quantities
-    quantity_matches = re.findall(r'(\d+)\s+([a-zA-Z]+)', message_lower)
-    if quantity_matches:
-        quantities = {}
-        for quantity, item in quantity_matches:
-            quantities[item] = int(quantity)
-        result["entities"]["quantity"] = quantities
-    
-    return result
+    try:
+        print(f"Attempting to navigate to: {destination}")
+        
+        # Try to send navigation event to parent window
+        try:
+            cl.send_to_parent({
+                "type": "navigation",
+                "destination": destination
+            })
+        except Exception as e:
+            print(f"Error sending navigation via cl.send_to_parent: {e}")
+        
+        # Also try direct HTTP API call
+        try:
+            response = requests.post(
+                f"{DASHBOARD_URL}/api/navigate",
+                json={"destination": destination},
+                timeout=3
+            )
+            print(f"Navigation API response: {response.status_code}")
+        except Exception as e:
+            print(f"Error calling navigation API: {e}")
+        
+        return f"Navigating to {destination} page..."
+    except Exception as e:
+        return f"Failed to navigate: {str(e)}"
 
-def get_default_response(intent_data: Dict) -> str:
+def place_order(order_data_str):
     """
-    Get a default response based on intent
+    Place an order with the Dash app
     
     Args:
-        intent_data (dict): Intent analysis
+        order_data_str (str): JSON string with order data
         
     Returns:
-        str: Default response
+        str: Response message
     """
-    intent = intent_data.get("intent", "casual")
+    try:
+        # Parse order data
+        order_data = json.loads(order_data_str)
+        
+        # Generate order ID if not present
+        if "id" not in order_data:
+            timestamp = int(time.time())
+            order_data["id"] = f"ORD-{timestamp}"
+        
+        print(f"Attempting to place order: {order_data}")
+        
+        # Try to send order to parent window
+        try:
+            cl.send_to_parent({
+                "type": "order_update",
+                "order": order_data
+            })
+        except Exception as e:
+            print(f"Error sending order via cl.send_to_parent: {e}")
+        
+        # Also try direct HTTP API call
+        try:
+            response = requests.post(
+                f"{DASHBOARD_URL}/api/place-order",
+                json=order_data,
+                timeout=5
+            )
+            print(f"Place order API response: {response.status_code}")
+        except Exception as e:
+            print(f"Error calling place-order API: {e}")
+        
+        return f"Order placed successfully! Your order ID is {order_data['id']}."
+    except Exception as e:
+        return f"Failed to place order: {str(e)}"
+
+def search_menu(query):
+    """
+    Search menu items based on query
     
-    # Default responses by intent
-    responses = {
-        "greeting": "👋 Hello! Welcome to Neo Cafe. How can I help you today?",
-        "menu": "📋 I'd be happy to show you our menu. Is there something specific you're looking for or would you like to see the full menu?",
-        "order": "🛒 I'd be happy to help you place an order. What would you like to have?",
-        "order_status": "📊 Let me check on the status of your order for you. Do you have an order ID or would you like to check your most recent order?",
-        "robot_status": "🤖 I'll check on the robot delivery status for you. One moment please.",
-        "help": "❓ I'm here to help! You can ask about our menu, place orders, track deliveries, or learn about our coffee shop. What would you like help with?",
-        "profile": "👤 I can help you with your profile information. Would you like to see your account details, order history, or preferences?",
-        "hours": "🕒 Neo Cafe is open Monday through Friday from 7:00 AM to 8:00 PM, and weekends from 8:00 AM to 6:00 PM.",
-        "navigation": "🧭 I'll help you navigate to that section of the app.",
-        "casual": "I'm here to help with your Neo Cafe experience. You can ask about our menu, place an order, or check delivery status."
+    Args:
+        query (str): Search query
+        
+    Returns:
+        str: Search results
+    """
+    try:
+        # Convert query to lowercase for case-insensitive matching
+        query_lower = query.lower()
+        
+        # Find matching items
+        matching_items = []
+        for item in menu_items:
+            # Check name, description, and category
+            if (query_lower in item["name"].lower() or 
+                query_lower in item["description"].lower() or 
+                query_lower in item["category"].lower()):
+                matching_items.append(item)
+        
+        # Format results
+        if not matching_items:
+            return "No menu items found matching your query."
+        
+        results = "Here are the menu items matching your query:\n\n"
+        for item in matching_items:
+            results += f"• **{item['name']}** - ${item['price']:.2f}\n"
+            results += f"  {item['description']}\n"
+            
+            # Add dietary info
+            dietary = []
+            if item.get("vegetarian"):
+                dietary.append("Vegetarian")
+            if item.get("vegan"):
+                dietary.append("Vegan")
+            if item.get("gluten_free"):
+                dietary.append("Gluten-Free")
+            
+            if dietary:
+                results += f"  *{', '.join(dietary)}*\n"
+            
+            results += "\n"
+        
+        return results
+    except Exception as e:
+        return f"Error searching menu: {str(e)}"
+
+def get_store_hours():
+    """Get store hours information"""
+    return """
+**Neo Cafe Hours:**
+
+Monday - Friday: 7:00 AM to 8:00 PM
+Saturday - Sunday: 8:00 AM to 6:00 PM
+
+Location: 123 Coffee Street, Downtown
+Phone: (555) 123-4567
+"""
+
+# ----- LangChain Setup -----
+
+def setup_langchain_agent():
+    """
+    Set up LangChain agent with tools for interacting with Neo Cafe
+    
+    Returns:
+        dict: Agent configuration
+    """
+    # Create knowledge base
+    kb = create_knowledge_base()
+    
+    # Set up retriever
+    retriever = kb.as_retriever(search_kwargs={"k": 5})
+    
+    # Create memory
+    memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+    
+    # Create tools
+    tools = [
+        Tool(
+            name="NavigateTool",
+            func=navigate_to_page,
+            description="Navigate to a page in the Neo Cafe app. Valid destinations are: menu, orders, delivery, profile, dashboard"
+        ),
+        Tool(
+            name="SearchMenuTool",
+            func=search_menu,
+            description="Search the menu for specific items, categories, or dietary restrictions"
+        ),
+        Tool(
+            name="PlaceOrderTool",
+            func=place_order,
+            description="Place an order with Neo Cafe. Expects a JSON string with order details"
+        ),
+        Tool(
+            name="StoreHoursTool",
+            func=get_store_hours,
+            description="Get information about Neo Cafe's operating hours"
+        )
+    ]
+    
+    # Create LLM
+    llm = ChatOpenAI(temperature=0.2)
+    
+    # Create agent
+    agent = initialize_agent(
+        tools,
+        llm,
+        agent=AgentType.CONVERSATIONAL_REACT_DESCRIPTION,
+        verbose=True,
+        memory=memory
+    )
+    
+    return {
+        "agent": agent,
+        "tools": tools,
+        "retriever": retriever,
+        "memory": memory
     }
-    
-    return responses.get(intent, responses["casual"])
 
 # ----- Chainlit Event Handlers -----
 
 @cl.on_chat_start
 async def start():
     """Initialize chat session"""
-    global menu_items, is_floating_chat
-    
-    # Load menu data
-    menu_items = await load_menu_data()
-    
-    # Initialize state objects
-    voice_state = VoiceState()
-    order_state = OrderState()
-    robot_state = RobotState()
-    
-    # Store state in user session
-    cl.user_session.set("voice_state", voice_state)
-    cl.user_session.set("order_state", order_state)
-    cl.user_session.set("robot_state", robot_state)
+    global is_floating_chat
     
     # Parse URL query parameters
     query = cl.context.session.get('url_query')
@@ -187,6 +394,14 @@ async def start():
         # Check if this is a floating chat instance
         if 'floating' in query_dict:
             is_floating_chat = query_dict['floating'][0].lower() == 'true'
+    
+    # Set up LangChain agent
+    try:
+        agent_config = setup_langchain_agent()
+        cl.user_session.set("agent_config", agent_config)
+        print("LangChain agent setup complete")
+    except Exception as e:
+        print(f"Error setting up LangChain agent: {e}")
     
     # Set initial context
     is_logged_in = 'user' in query_dict
@@ -315,398 +530,28 @@ async def process_message(message, message_id=None, source=None):
     # Log the processing
     print(f"Processing message: '{message}' (ID: {message_id}, Source: {source})")
     
-    # Get state objects and context
-    voice_state = cl.user_session.get("voice_state")
-    order_state = cl.user_session.get("order_state")
-    robot_state = cl.user_session.get("robot_state")
+    # Get agent configuration and context
+    agent_config = cl.user_session.get("agent_config")
     context = cl.user_session.get("context", {})
-    is_floating_chat = context.get("is_floating", False)
     
-    # Initialize if not present
-    if not order_state:
-        order_state = OrderState()
-        cl.user_session.set("order_state", order_state)
+    if not agent_config:
+        await cl.Message(content="I'm still initializing. Please try again in a moment.").send()
+        return
     
-    if not robot_state:
-        robot_state = RobotState()
-        cl.user_session.set("robot_state", robot_state)
-    
-    # Update context with current order information
-    context["order_items"] = [item["name"] for item in order_state.items]
-    context["has_active_order"] = order_state.order_confirmed
-    context["order_id"] = order_state.order_id
-    cl.user_session.set("context", context)
-    
-    # Check if voice mode is enabled
-    should_speak = voice_state and voice_state.is_enabled()
-    
-    # Analyze user intent using rule-based approach (more reliable than OpenAI for this use case)
-    intent_data = analyze_intent_rule_based(message)
-    
-    # Get response based on intent
-    response = get_default_response(intent_data)
-    
-    # Handle navigation if needed
-    navigate_to = intent_data.get("navigate_to")
-    if navigate_to:
-        # Only include navigation message if we're going to a different page
-        if navigate_to != context.get("current_page"):
-            # Add navigation text to response
-            response += f"\n\nI'll take you to the {navigate_to} section."
-            
-            # Try to send navigation event to parent window
-            try:
-                print(f"Attempting to navigate to: {navigate_to}")
-                await cl.send_to_parent({
-                    "type": "navigation",
-                    "destination": navigate_to
-                })
-                
-                # Also try the older post_to_parent method
-                try:
-                    cl.context.session.post_to_parent({
-                        "type": "navigation",
-                        "destination": navigate_to
-                    })
-                except Exception as e:
-                    print(f"Could not use post_to_parent: {e}")
-                    
-            except Exception as e:
-                print(f"Error sending navigation to parent: {e}")
-    
-    # Send the response
-    response_msg = await cl.Message(content=response).send()
-    
-    # If voice is enabled, speak the response
-    if should_speak:
-        voice_state.speak_text(response.replace("*", ""))
-    
-    # Handle specific intents with actions
-    intent = intent_data.get("intent")
-    
-    # Process menu requests
-    if intent == "menu":
-        menu_category = None
-        if "entities" in intent_data and "menu_category" in intent_data["entities"]:
-            menu_category = intent_data["entities"]["menu_category"]
-        
-        # For floating chat, show a more compact menu
-        if is_floating_chat:
-            await show_compact_menu(category=menu_category)
-        else:
-            await show_menu(category=menu_category)
-    
-    # Process order requests
-    elif intent == "order":
-        # Check for specific menu items mentioned
-        if "entities" in intent_data and "menu_items" in intent_data["entities"]:
-            menu_items_to_add = intent_data["entities"]["menu_items"]
-            quantities = intent_data.get("entities", {}).get("quantity", {})
-            
-            added_items = []
-            for item_name in menu_items_to_add:
-                # Default to quantity 1 if not specified
-                quantity = quantities.get(item_name, 1)
-                result = order_state.add_item(item_name, quantity)
-                
-                # Only add to confirmation if successfully added
-                if "added" in result.lower():
-                    added_items.append(f"{quantity}x {item_name}")
-            
-            # If items were added, show confirmation and order summary
-            if added_items:
-                items_text = ", ".join(added_items)
-                await cl.Message(content=f"🛒 I've added {items_text} to your order.").send()
-                await display_order_summary()
-                
-                # Try to notify parent window about order update
-                try:
-                    await cl.send_to_parent({
-                        "type": "orderUpdate",
-                        "order": order_state.get_order_data()
-                    })
-                except Exception as e:
-                    print(f"Error sending order update to parent: {e}")
-    
-    # Process order status requests
-    elif intent == "order_status":
-        if order_state.order_confirmed and order_state.order_id:
-            # Show order status
-            status_msg = robot_state.format_status_message(order_state.order_id)
-            await cl.Message(content=status_msg).send()
-        else:
-            # No active order
-            await cl.Message(content="You don't have any active orders to track. Would you like to place an order?").send()
-    
-    # Process robot status requests
-    elif intent == "robot_status":
-        # Show general robot status
-        status_msg = robot_state.format_status_message()
-        await cl.Message(content=status_msg).send()
-    
-    # Process help requests
-    elif intent == "help":
-        # Show help based on context
-        help_text = """
-# 📚 BaristaBot Help
-
-## 🛍️ What I Can Do:
-- Show you our menu and make recommendations
-- Help you place and customize orders
-- Track your order status and delivery
-- Provide information about Neo Cafe
-- Answer questions about our products
-
-## 💬 Try These Examples:
-- "I'd like to order a latte and a croissant"
-- "What's on the menu?"
-- "Where's my order?"
-- "Tell me about your coffee beans"
-- "When are you open?"
-- "Take me to my profile"
-
-Just chat naturally - I understand regular language!
-"""
-        await cl.Message(content=help_text).send()
-
-# ----- Data Management Functions -----
-
-async def load_menu_data():
-    """
-    Load menu data from menu.json
-    
-    Returns:
-        list: Menu items
-    """
     try:
-        # Try multiple possible paths for the menu file
-        possible_paths = [
-            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'app', 'data', 'seed_data', 'menu.json'),
-            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'seed_data', 'menu.json'),
-            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'menu.json')
-        ]
+        # Get agent
+        agent = agent_config["agent"]
         
-        # Try each path
-        for menu_path in possible_paths:
-            if os.path.exists(menu_path):
-                print(f"Found menu file at: {menu_path}")
-                with open(menu_path, 'r') as f:
-                    return json.load(f)
+        # Run the message through the agent
+        message_with_context = f"Current page: {context.get('current_page', 'home')}. User says: {message}"
+        response = await cl.make_async(agent.run)(message_with_context)
         
-        # If we get here, no file was found
-        print("Warning: Could not find menu.json in any expected location")
+        # Send the response
+        await cl.Message(content=response).send()
         
-        # Return a fallback menu with some basic items
-        return [
-            {
-                "id": 1,
-                "name": "Espresso",
-                "description": "Rich and complex espresso with notes of cocoa and caramel.",
-                "price": 2.95,
-                "category": "coffee",
-                "popular": True
-            },
-            {
-                "id": 2,
-                "name": "Latte",
-                "description": "Smooth espresso with steamed milk and a light layer of foam.",
-                "price": 4.50,
-                "category": "coffee",
-                "popular": True
-            },
-            {
-                "id": 3,
-                "name": "Cappuccino",
-                "description": "Espresso with steamed milk and a deep layer of foam.",
-                "price": 4.25,
-                "category": "coffee",
-                "popular": True
-            },
-            {
-                "id": 7,
-                "name": "Croissant",
-                "description": "Buttery, flaky pastry made with pure butter.",
-                "price": 3.25,
-                "category": "pastries",
-                "popular": True
-            }
-        ]
-            
     except Exception as e:
-        print(f"Error loading menu data: {e}")
-        return []
-
-# ----- Menu Display Functions -----
-
-async def show_menu(category=None):
-    """
-    Show the menu, optionally filtered by category
-    
-    Args:
-        category (str, optional): Category to filter by
-    """
-    await cl.Message(content="📋 **Neo Cafe Menu**").send()
-    
-    # Group menu items by category
-    items_by_category = {}
-    for item in menu_items:
-        item_category = item.get("category", "Other")
-        if item_category not in items_by_category:
-            items_by_category[item_category] = []
-        items_by_category[item_category].append(item)
-    
-    # If category specified, only show that category
-    categories_to_show = [category] if category and category in items_by_category else items_by_category.keys()
-    
-    # Show ordering instructions
-    ordering_instructions = """
-### 📝 How to Order:
-- Say "I'd like [item]" to add to your order
-- Ask me about any item for more information
-- Say "View my order" to see your current selections
-"""
-    await cl.Message(content=ordering_instructions).send()
-    
-    # Display items by category
-    for category in categories_to_show:
-        # Capitalize category name and add emoji
-        category_emoji = "☕"
-        if "coffee" in category.lower():
-            category_emoji = "☕"
-        elif "tea" in category.lower():
-            category_emoji = "🍵"
-        elif "pastry" in category.lower() or "bakery" in category.lower():
-            category_emoji = "🥐"
-        elif "breakfast" in category.lower():
-            category_emoji = "🍳"
-        elif "sandwich" in category.lower():
-            category_emoji = "🥪"
-        elif "dessert" in category.lower():
-            category_emoji = "🍰"
-        elif "drink" in category.lower() or "beverage" in category.lower():
-            category_emoji = "🥤"
-        
-        category_name = category.capitalize()
-        
-        await cl.Message(content=f"## {category_emoji} {category_name}").send()
-        
-        # Show items in a compact list format
-        item_messages = []
-        items = items_by_category[category]
-        
-        # Create a formatted list for each item
-        for item in items:
-            item_msg = f"### {item['name']} - ${item['price']:.2f}\n"
-            item_msg += f"{item.get('description', '')}\n"
-            if item.get('popular'):
-                item_msg += "**Popular!** ⭐\n"
-            
-            item_messages.append(item_msg)
-        
-        # Send items in groups to reduce message count
-        for i in range(0, len(item_messages), 3):
-            group = item_messages[i:i+3]
-            await cl.Message(content="\n\n".join(group)).send()
-
-async def show_compact_menu(category=None):
-    """
-    Show a compact menu version for the floating chat
-    
-    Args:
-        category (str, optional): Category to filter by
-    """
-    await cl.Message(content="📋 **Neo Cafe Menu**").send()
-    
-    # Group menu items by category
-    items_by_category = {}
-    for item in menu_items:
-        item_category = item.get("category", "Other")
-        if item_category not in items_by_category:
-            items_by_category[item_category] = []
-        items_by_category[item_category].append(item)
-    
-    # If category specified, only show that category
-    categories_to_show = [category] if category and category in items_by_category else items_by_category.keys()
-    
-    # For each category, create a compact display
-    for category in categories_to_show:
-        category_name = category.capitalize()
-        
-        # Create a compact list of items in this category
-        items = items_by_category[category]
-        items_text = f"## {category_name}\n\n"
-        
-        for item in items:
-            # Compact item display with popularity mark
-            popular_mark = "⭐ " if item.get("popular") else ""
-            items_text += f"• **{popular_mark}{item['name']}** - ${item['price']:.2f}\n"
-        
-        # Add simple ordering instructions
-        items_text += "\n*Say 'I'd like [item]' to order*"
-        
-        # Send as a single message
-        await cl.Message(content=items_text).send()
-
-async def display_order_summary():
-    """Display the current order summary"""
-    order_state = cl.user_session.get("order_state")
-    if not order_state:
-        return
-    
-    # Check if there are items in the order
-    if not order_state.items:
-        await cl.Message(content="🛒 Your order is currently empty. Browse our menu to add items!").send()
-        await cl.Message(content="Would you like to see our menu?").send()
-        return
-    
-    # Create summary header
-    summary = "🛍️ **Your Order Summary**\n\n"
-    
-    # Add items
-    for item in order_state.items:
-        name = item.get('name', 'Unknown item')
-        price = item.get('price', 0)
-        quantity = item.get('quantity', 1)
-        subtotal = price * quantity
-        summary += f"- {quantity}x {name} (${subtotal:.2f})\n"
-    
-    # Add special instructions if any
-    if order_state.special_instructions:
-        summary += f"\n**Special Instructions:** {order_state.special_instructions}\n"
-    
-    # Add delivery location and payment method
-    summary += f"\n**Delivery Location:** {order_state.delivery_location}\n"
-    summary += f"**Payment Method:** {order_state.payment_method}\n"
-    
-    # Add total
-    summary += f"**Total:** ${order_state.total_price:.2f}"
-    
-    # Add order status if confirmed
-    if order_state.order_confirmed:
-        summary += f"\n\n**Status:** Confirmed ✅ (Order ID: {order_state.order_id})"
-        
-    # Send the summary
-    await cl.Message(content=summary).send()
-    
-    # Add suggested next actions based on order state
-    if not order_state.order_confirmed:
-        next_actions = """
-**What would you like to do next?**
-- "Confirm my order"
-- "Add more items"
-- "Clear my order"
-- "Add special instructions: [your notes]"
-- "Deliver to [location]"
-"""
-        await cl.Message(content=next_actions).send()
-    else:
-        # Order is already confirmed
-        tracking_actions = """
-**Order Confirmed!**
-- "Track my order"
-- "Start a new order"
-"""
-        await cl.Message(content=tracking_actions).send()
+        print(f"Error processing message: {e}")
+        await cl.Message(content="I'm having trouble processing your request. Could you please try again or rephrase your question?").send()
 
 # ----- Chainlit Set Starters -----
 
@@ -740,3 +585,10 @@ async def set_starters():
             icon="❓",
         ),
     ]
+
+def set_starters():
+    """
+    This function returns starter messages for the chat interface.
+    The @cl.set_starters decorator takes the list of starters directly.
+    """
+    pass  # Using the decorator with direct list argument, so function body is empty

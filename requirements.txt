@@ -1,19 +1,36 @@
 # File: requirements.txt
 # Project dependencies for Neo Cafe
 
+# Core dashboard components
 dash
 dash-bootstrap-components
 plotly
+
+# Web server
 Flask
 Flask-SocketIO
-pandas
-numpy
-chainlit
-requests
-python-dotenv
-SpeechRecognition
-pyttsx3
 gunicorn
 gevent
+eventlet
 Werkzeug
+
+# Data processing
+pandas
+numpy
+
+# Networking and API
+requests
+python-dotenv
+
+# Chatbot and AI components
+chainlit
 openai
+langchain
+langchain-community
+langchain-openai
+faiss-cpu
+tiktoken
+
+# Optional: Voice capabilities (can be commented out if not needed)
+# SpeechRecognition
+# pyttsx3

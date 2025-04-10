@@ -1,4 +1,5 @@
-# File: server.py (Enhanced with improved error handling)
+# Updated server.py with new API endpoints for Chainlit
+
 import uuid
 from flask import Flask, render_template, redirect, session, request, jsonify
 from datetime import datetime
@@ -60,6 +61,59 @@ def configure_server(server, socketio):
             'time': str(datetime.now())
         })
     
+    # New API endpoints for Chainlit to call back
+    
+    @server.route('/api/navigate', methods=['POST'])
+    def api_navigate():
+        """API endpoint for navigation requests from Chainlit"""
+        try:
+            data = request.get_json()
+            destination = data.get('destination')
+            
+            # Validate destination
+            valid_destinations = ['menu', 'orders', 'delivery', 'profile', 'dashboard', 'home']
+            if destination not in valid_destinations:
+                return jsonify({'status': 'error', 'message': 'Invalid destination'})
+            
+            # Emit socket event to trigger navigation
+            socketio.emit('navigate_to', {'destination': destination})
+            
+            return jsonify({
+                'status': 'success', 
+                'message': f'Navigation to {destination} requested',
+                'destination': destination
+            })
+        except Exception as e:
+            print(f"Error in navigation API: {str(e)}")
+            return jsonify({'status': 'error', 'message': str(e)})
+    
+    @server.route('/api/place-order', methods=['POST'])
+    def api_place_order():
+        """API endpoint for placing orders from Chainlit"""
+        try:
+            order_data = request.get_json()
+            
+            # Validate order data
+            if not order_data or not order_data.get('items'):
+                return jsonify({'status': 'error', 'message': 'Invalid order data'})
+            
+            # Generate order ID if not provided
+            if 'id' not in order_data:
+                timestamp = int(time.time())
+                order_data['id'] = f"ORD-{timestamp}"
+            
+            # Emit socket event with order data
+            socketio.emit('order_update', order_data)
+            
+            return jsonify({
+                'status': 'success', 
+                'message': 'Order placed successfully',
+                'order_id': order_data['id']
+            })
+        except Exception as e:
+            print(f"Error in place-order API: {str(e)}")
+            return jsonify({'status': 'error', 'message': str(e)})
+    
     # SocketIO event handlers
     @socketio.on('connect')
     def handle_connect():
@@ -114,7 +168,7 @@ def configure_server(server, socketio):
             print(f"Error in handle_send_chat_message: {str(e)}")
             return {'status': 'error', 'message': str(e)}
     
-    # Add a new route to handle direct messages to Chainlit
+    # Enhanced direct message handler
     @socketio.on('direct_message_to_chainlit')
     def handle_direct_message(data):
         """Handle direct messages to Chainlit"""
@@ -126,6 +180,12 @@ def configure_server(server, socketio):
             
             # Broadcast to all clients to ensure the iframe gets it
             socketio.emit('chat_message_from_dashboard', {
+                'message': message,
+                'session_id': session_id
+            })
+            
+            # Also emit a specific message for the Chainlit iframe
+            socketio.emit('message_to_chainlit', {
                 'message': message,
                 'session_id': session_id
             })

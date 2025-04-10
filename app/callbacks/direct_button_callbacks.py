@@ -3,7 +3,6 @@
 import dash
 from dash import Input, Output, State, callback_context, html, dcc, no_update, ALL
 import dash_bootstrap_components as dbc
-from app.utils.message_bridge import MessageBridge
 import json
 import time
 import uuid
@@ -68,89 +67,31 @@ def register_callbacks(app, socketio):
         # Create a session ID
         session_id = str(uuid.uuid4())
         
-        # Create a JavaScript code to trigger the client-side message sending
-        js_code = f'''
-        if (document.getElementById('floating-chat-panel')) {{
-            // Make sure the panel is visible
-            document.getElementById('floating-chat-panel').style.display = 'flex';
-            document.getElementById('floating-chat-panel').className = 'floating-chat-panel';
-            
-            // Wait a short while for the panel to be visible
-            setTimeout(function() {{
-                const message = "{message}";
-                
-                // Try using our direct message sender if available
-                if (window.sendDirectMessageToChainlit) {{
-                    console.log("Sending via sendDirectMessageToChainlit:", message);
-                    window.sendDirectMessageToChainlit(message);
-                }}
-                
-                // Also try using chatClient as a backup
-                if (window.chatClient && window.chatClient.sendMessage) {{
-                    console.log("Sending via chatClient:", message);
-                    window.chatClient.sendMessage(message);
-                }}
-                
-                // Also try direct postMessage to the iframe as a last resort
-                try {{
-                    const iframe = document.getElementById('floating-chainlit-frame');
-                    if (iframe && iframe.contentWindow) {{
-                        console.log("Sending via direct postMessage:", message);
-                        iframe.contentWindow.postMessage({{
-                            type: 'userMessage',
-                            message: message
-                        }}, '*');
-                    }}
-                }} catch(e) {{
-                    console.error("Error sending via postMessage:", e);
-                }}
-            }}, 500);
-        }}
-        '''
-        
-        # Execute the JavaScript
-        app.clientside_callback(
-            js_code,
-            Output('direct-message-status', 'className', allow_duplicate=True),
-            Input('direct-message-status', 'children'),
-            prevent_initial_call=True
-        )
-        
-        # Attempt all methods to send the message
-        methods_attempted = []
-        
-        # Method 1: Try via Socket.IO
+        # Use socketio for reliable communication (no API call)
         try:
+            # First make sure panel is open
+            if is_panel_hidden:
+                socketio.emit('open_chat_panel', {'message_sent': message})
+            
+            # Send the message via socketio directly
             socketio.emit('chat_message_from_dashboard', {
                 'message': message,
                 'session_id': session_id
             })
+            
             print(f"Message sent via socket.io: {message}")
-            methods_attempted.append("socket.io")
+            
+            # Also add client-side handling for redundancy
+            add_client_js(app, message)
+            
+            return message
         except Exception as e:
-            print(f"Error sending via socket.io: {e}")
-        
-        # Method 2: Try via MessageBridge (file-based approach)
-        try:
-            result = MessageBridge.send_message(message, session_id)
-            if result.get('status') == 'success':
-                print(f"Message sent via bridge: {message}")
-                methods_attempted.append("message_bridge")
-        except Exception as e:
-            print(f"Error sending via bridge: {e}")
-        
-        # Method 3: If panel is hidden, emit event to open it
-        if is_panel_hidden:
-            try:
-                socketio.emit('open_chat_panel', {
-                    'message_sent': message
-                })
-                methods_attempted.append("open_panel")
-            except Exception as e:
-                print(f"Error opening chat panel: {e}")
-        
-        # Return status as a string message
-        return message
+            print(f"Error sending message via socket.io: {e}")
+            
+            # Try client-side method as backup
+            add_client_js(app, message)
+            
+            return f"Error sending message: {str(e)}"
     
     # Special case for voice toggle button
     @app.callback(
@@ -172,3 +113,75 @@ def register_callbacks(app, socketio):
         except Exception as e:
             print(f"Error toggling voice: {e}")
             return "Voice toggle failed"
+
+def add_client_js(app, message):
+    """Add client-side callback for redundant message delivery"""
+    js_code = f'''
+    (function() {{
+        console.log("Client-side message handler activated");
+        
+        // Function to try all message sending methods
+        function trySendingMessage() {{
+            const message = "{message}";
+            let sent = false;
+            
+            // Make sure chat panel is visible
+            if (document.getElementById('floating-chat-panel')) {{
+                document.getElementById('floating-chat-panel').style.display = 'flex';
+                document.getElementById('floating-chat-panel').className = 'floating-chat-panel';
+            }}
+            
+            // Method 1: Using sendDirectMessageToChainlit if available
+            if (window.sendDirectMessageToChainlit) {{
+                try {{
+                    window.sendDirectMessageToChainlit(message);
+                    console.log("Sent via sendDirectMessageToChainlit");
+                    sent = true;
+                }} catch(e) {{
+                    console.error("Error with sendDirectMessageToChainlit:", e);
+                }}
+            }}
+            
+            // Method 2: Using chatClient if available
+            if (!sent && window.chatClient && window.chatClient.sendMessage) {{
+                try {{
+                    window.chatClient.sendMessage(message);
+                    console.log("Sent via chatClient");
+                    sent = true;
+                }} catch(e) {{
+                    console.error("Error with chatClient:", e);
+                }}
+            }}
+            
+            // Method 3: Direct postMessage to iframe
+            if (!sent) {{
+                try {{
+                    const iframe = document.getElementById('floating-chainlit-frame');
+                    if (iframe && iframe.contentWindow) {{
+                        iframe.contentWindow.postMessage({{
+                            type: 'userMessage',
+                            message: message
+                        }}, '*');
+                        console.log("Sent via postMessage");
+                        sent = true;
+                    }}
+                }} catch(e) {{
+                    console.error("Error with postMessage:", e);
+                }}
+            }}
+            
+            return sent;
+        }}
+        
+        // Try sending the message after a delay to ensure panel is visible
+        setTimeout(trySendingMessage, 500);
+    }})();
+    '''
+    
+    # Create a temporary clientside callback
+    app.clientside_callback(
+        js_code,
+        Output('direct-message-status', 'className', allow_duplicate=True),
+        Input('direct-message-status', 'children'),
+        prevent_initial_call=True
+    )

@@ -1,230 +1,211 @@
-/* File: assets/css/floating_chat.css */
+/* assets/css/floating_chat.css */
 
-/* Floating chat button styles */
+/* Base styles for floating chat */
 .floating-chat-button-container {
     position: fixed;
     bottom: 20px;
     right: 20px;
     z-index: 1000;
-}
-
-.floating-chat-button {
-    background-color: #6F4E37;  /* Coffee brown color */
+  }
+  
+  .floating-chat-button {
+    padding: 0.75rem 1.25rem;
+    background-color: var(--bs-primary, #6F4E37);
     color: white;
     border: none;
     border-radius: 30px;
-    padding: 10px 20px;
-    font-size: 16px;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     display: flex;
     align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
     transition: all 0.3s ease;
-}
-
-.floating-chat-button:hover {
-    background-color: #8B5A2B;  /* Slightly lighter brown on hover */
+  }
+  
+  .floating-chat-button:hover {
+    background-color: var(--bs-primary-dark, #5a3c28);
     transform: translateY(-2px);
-    box-shadow: 0 6px 15px rgba(0, 0, 0, 0.25);
-}
-
-.floating-chat-button i {
-    font-size: 18px;
-}
-
-/* Floating chat panel styles */
-.floating-chat-panel {
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+  }
+  
+  .chat-button-text {
+    margin-left: 0.5rem;
+  }
+  
+  /* Floating chat panel styles */
+  .floating-chat-panel {
     position: fixed;
-    bottom: 20px;
+    bottom: 90px;
     right: 20px;
-    width: 350px;
-    height: 500px;
+    width: 90vw;
+    max-width: 400px;
+    height: 70vh;
+    max-height: 600px;
+    z-index: 1000;
     background-color: white;
     border-radius: 10px;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
     display: flex;
     flex-direction: column;
-    z-index: 1000;
     overflow: hidden;
-    transition: all 0.3s ease;
-}
-
-.floating-chat-panel.minimized {
-    height: 60px;
+    transition: height 0.3s ease, width 0.3s ease;
+  }
+  
+  /* Responsive sizing for different screen sizes */
+  @media (min-width: 768px) {
+    .floating-chat-panel {
+      width: 35vw;
+      max-width: 420px;
+      height: 70vh;
+    }
+  }
+  
+  @media (min-width: 1200px) {
+    .floating-chat-panel {
+      width: 25vw;
+      max-width: 450px;
+      height: 65vh;
+    }
+  }
+  
+  /* For extra large screens, make sure the chat isn't too small relative to screen */
+  @media (min-width: 1600px) {
+    .floating-chat-panel {
+      max-width: 480px; /* Slightly larger max-width */
+      min-width: 400px; /* Ensure it's not too small */
+    }
+  }
+  
+  /* When in a narrower window (e.g., half-screen mode) */
+  @media (max-width: 960px) and (min-width: 600px) {
+    .floating-chat-panel {
+      width: 45%;
+      max-width: 450px;
+      height: 75vh;
+    }
+  }
+  
+  /* When the panel is in minimized state */
+  .floating-chat-panel.minimized {
+    height: 60px !important; /* Use !important to override media queries */
     overflow: hidden;
-}
-
-.chat-panel-header {
-    background-color: #6F4E37; /* Match button color */
+  }
+  
+  /* Panel transitions for smooth animations */
+  .floating-chat-panel {
+    transition: height 0.3s ease, width 0.3s ease;
+  }
+  
+  /* Chat panel header */
+  .chat-panel-header {
+    padding: 15px;
+    border-bottom: 1px solid #e9ecef;
+    background-color: var(--bs-primary, #6F4E37);
     color: white;
-    padding: 10px 15px;
-    border-radius: 10px 10px 0 0;
-}
-
-/* Hidden for minimized state */
-.floating-chat-panel.minimized .chat-panel-body,
-.floating-chat-panel.minimized .chat-panel-footer {
-    display: none !important;
-}
-
-.chat-panel-body {
-    flex: 1;
-    overflow: hidden;
-}
-
-/* Two-column layout for chat body */
-.chat-panel-body-left {
-    flex: 1; /* Takes up 2/3 of the space */
-    border-right: 1px solid #dee2e6;
-    overflow: hidden;
-}
-
-.chat-panel-body-right {
-    width: 280px; /* Fixed width */
-    padding: 16px;
-    overflow-y: auto;
-}
-
-.chat-panel-footer {
-    background-color: #f8f9fa;
-    border-top: 1px solid #dee2e6;
-    min-height: 40px;
-}
-
-/* Button symbol styling */
-.btn-symbol {
-    font-size: 16px;
-    font-weight: bold;
-}
-
-/* Hide Font Awesome icon if the HTML entity is visible */
-.btn-symbol:not(:empty) + i {
-    display: none;
-}
-
-/* Make sure Font Awesome is included */
-.chat-control-button .fas {
-    display: inline-block;
-}
-
-/* Better styling for control buttons */
-.chat-control-button {
+    flex-shrink: 0; /* Prevent header from shrinking */
+  }
+  
+  /* Control buttons in header */
+  .chat-control-button {
     background: rgba(255, 255, 255, 0.2);
     border: none;
     color: white;
-    width: 30px;
-    height: 30px;
+    width: 32px;
+    height: 32px;
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background-color 0.2s;
     cursor: pointer;
-    padding: 0;
-}
-
-.chat-control-button:hover {
-    background-color: rgba(255, 255, 255, 0.4);
-}
-/* Minimized state */
-.floating-chat-panel.minimized {
-    height: 60px;
+    transition: background 0.2s ease;
+  }
+  
+  .chat-control-button:hover {
+    background: rgba(255, 255, 255, 0.3);
+  }
+  
+  /* Split view for chat panel body */
+  .chat-panel-body {
+    flex: 1;
     overflow: hidden;
-}
-
-/* Expanded state */
-.floating-chat-panel.expanded {
-    width: 760px;
-    height: 650px; /* More height to show FAQ section */
-}
-
-/* Badge notification */
-.chat-badge {
-    position: absolute;
-    top: -5px;
-    right: -5px;
-    background-color: #dc3545;
-    color: white;
-    border-radius: 50%;
-    width: 20px;
-    height: 20px;
-    font-size: 12px;
     display: flex;
-    justify-content: center;
-    align-items: center;
-}
-
-/* Chat FAQ section */
-#chat-faq-section {
-    padding: 16px;
-    border-top: 1px solid #dee2e6;
-    background-color: #f8f9fa;
-}
-
-/* Responsive adjustments */
-@media (max-width: 992px) {
-    .floating-chat-panel {
-        width: 90%;
-        height: 80%;
-        max-width: 760px;
-        bottom: 80px;
-        right: 5%;
-        left: 5%;
-    }
-    
+  }
+  
+  .chat-panel-body-left {
+    flex: 2;
+    overflow: hidden;
+    border-right: 1px solid #e9ecef;
+    min-width: 0; /* Allow content to shrink below min-content width */
+  }
+  
+  .chat-panel-body-right {
+    flex: 1;
+    overflow-y: auto;
+    padding: 15px;
+    min-width: 0; /* Allow content to shrink below min-content width */
+  }
+  
+  /* When the window is narrow, stack the body sections */
+  @media (max-width: 500px) {
     .chat-panel-body {
-        flex-direction: column;
+      flex-direction: column;
     }
     
     .chat-panel-body-left {
-        height: 70%;
-        border-right: none;
-        border-bottom: 1px solid #dee2e6;
+      flex: 3;
+      border-right: none;
+      border-bottom: 1px solid #e9ecef;
     }
     
     .chat-panel-body-right {
-        width: 100%;
-        height: 30%;
-        padding: 10px;
+      flex: 2;
     }
-}
-
-@media (max-width: 576px) {
+  }
+  
+  /* Footer with quick access buttons */
+  .chat-panel-footer {
+    padding: 10px 15px;
+    border-top: 1px solid #e9ecef;
+    background-color: #f8f9fa;
+    flex-shrink: 0; /* Prevent footer from shrinking */
+  }
+  
+  /* FAQ section */
+  #chat-faq-section {
+    margin-top: 15px;
+    overflow-y: auto;
+    max-height: 200px;
+  }
+  
+  /* When in a small viewport make sure elements stay visible */
+  @media (max-height: 700px) {
     .floating-chat-panel {
-        bottom: 80px;
-        right: 10px;
-        width: 95%;
-        height: 80%;
-        max-height: 600px;
+      height: 80vh;
+      bottom: 70px;
     }
-    
-    .floating-chat-button-container {
-        right: 10px;
-        bottom: 10px;
-    }
-    
-    .chat-panel-body-right {
-        display: none; /* Hide the right panel on very small screens */
-    }
-    
-    .chat-panel-body-left {
-        height: 100%;
-    }
-}
-
-/* For mobile/responsive design */
-@media (max-width: 768px) {
-    .chat-button-text {
-        display: none;  /* Hide text on small screens */
-    }
-    
-    .floating-chat-button {
-        padding: 12px;
-        border-radius: 50%;  /* Make it circular on mobile */
-    }
-    
-    .floating-chat-button i {
-        margin-right: 0 !important;
-    }
-}
+  }
+  
+  /* Ensure the iframe takes up the full available space */
+  #floating-chainlit-frame {
+    width: 100%;
+    height: 100%;
+    border: none;
+  }
+  
+  /* Hide scrollbars but keep functionality */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    background: #f1f1f1;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 3px;
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
+  }

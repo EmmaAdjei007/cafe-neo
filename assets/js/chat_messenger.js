@@ -1,178 +1,295 @@
-/**
- * Chat Messenger for Neo Cafe
- * A client-side utility for sending messages to the Chainlit chatbot
- */
+// assets/js/chat_messenger.js
 
-// Create a namespace for the chat client
-window.chatClient = (function() {
-    // Internal variables
-    let isConnected = false;
-    let messageQueue = [];
-    let retryCount = 0;
-    const MAX_RETRIES = 5;
-    
-    // Find all possible iframe paths
-    function findChatIframe() {
-        const iframes = [
-            document.getElementById('floating-chainlit-frame'),
-            document.getElementById('chatframe'),
-            ...Array.from(document.querySelectorAll('iframe')).filter(
-                iframe => iframe.src && iframe.src.includes('chainlit')
-            )
-        ].filter(Boolean);
+// Create socket.io connection when document is loaded
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('Initializing NeoCafe chat messenger');
+    initializeChatMessenger();
+});
+
+function initializeChatMessenger() {
+    // Initialize Socket.IO connection if not already done
+    if (!window.chatSocket && io) {
+        window.chatSocket = io.connect();
+        console.log('Socket.IO connection initialized');
         
-        return iframes.length > 0 ? iframes[0] : null;
+        // Set up socket event listeners
+        setupSocketListeners();
+    } else if (!io) {
+        console.warn('Socket.IO not loaded, will retry in 1 second');
+        setTimeout(initializeChatMessenger, 1000);
+        return;
+    } else {
+        console.log('Chat socket already initialized');
     }
     
-    // Process queued messages
-    function processQueue() {
-        console.log(`[ChatClient] Processing ${messageQueue.length} queued messages`);
-        
-        // Create a copy of the queue and clear it
-        const queueCopy = [...messageQueue];
-        messageQueue = [];
-        
-        // Process each message
-        queueCopy.forEach(message => {
-            sendMessage(message, true);
-        });
-    }
-    
-    // Send a message using any available method
-    function sendMessage(message, isFromQueue = false) {
-        console.log(`[ChatClient] Sending message: ${message}`);
-        
-        // If message is not a string, try to convert it
-        if (typeof message !== 'string') {
-            try {
-                message = JSON.stringify(message);
-            } catch (e) {
-                console.error('[ChatClient] Could not convert message to string:', e);
-                return false;
+    // Create message bridge to share between components
+    if (!window.messageBridge) {
+        window.messageBridge = {
+            sendMessage: sendDirectMessageToChainlit,
+            receiveMessage: function(callback) {
+                if (typeof callback === 'function') {
+                    this.messageCallback = callback;
+                }
+            },
+            messageCallback: null,
+            navigation: {
+                navigate: navigateFromChat,
+                callback: null
+            },
+            orderUpdate: {
+                updateOrder: updateOrderFromChat,
+                callback: null
             }
-        }
-        
-        // Try different methods in order of preference
-        
-        // Method 1: Use the direct message handler
-        if (window.sendDirectMessageToChainlit) {
-            console.log('[ChatClient] Using directMessageToChainlit');
-            const success = window.sendDirectMessageToChainlit(message);
-            if (success) return true;
-        }
-        
-        // Method 2: Post directly to iframe
-        const iframe = findChatIframe();
-        if (iframe && iframe.contentWindow) {
-            try {
-                console.log('[ChatClient] Using iframe postMessage');
-                
-                // Try different message formats
-                const formats = [
-                    { type: 'direct_message', message },
-                    { type: 'userMessage', message },
-                    { kind: 'user_message', data: { content: message } },
-                    message // Plain string as fallback
-                ];
-                
-                // Send all formats
-                formats.forEach(format => {
-                    iframe.contentWindow.postMessage(format, '*');
-                });
-                
-                return true;
-            } catch (e) {
-                console.error('[ChatClient] Error posting to iframe:', e);
-            }
-        }
-        
-        // Method 3: Use Socket.IO if available
-        if (window.socket && window.socket.emit) {
-            try {
-                console.log('[ChatClient] Using Socket.IO');
-                window.socket.emit('chat_message_from_dashboard', {
-                    message: message,
-                    session_id: Date.now().toString()
-                });
-                return true;
-            } catch (e) {
-                console.error('[ChatClient] Error sending via Socket.IO:', e);
-            }
-        }
-        
-        // If we get here, no method succeeded
-        if (!isFromQueue) {
-            // Queue the message for retry if it's not already from the queue
-            messageQueue.push(message);
-            
-            // Try again after a delay if we haven't exceeded the retry limit
-            if (retryCount < MAX_RETRIES) {
-                retryCount++;
-                console.log(`[ChatClient] Message queued, will retry in ${retryCount}s`);
-                setTimeout(processQueue, retryCount * 1000);
-            }
-        }
-        
-        return false;
-    }
-    
-    // Initialize the chat client
-    function init() {
-        console.log('[ChatClient] Initializing');
-        
-        // Listen for iframe ready events
-        window.addEventListener('message', function(event) {
-            // Check if it's a ready message
-            if (event.data && 
-                (event.data === 'ready' || 
-                 (typeof event.data === 'object' && event.data.type === 'iframe_ready'))) {
-                console.log('[ChatClient] Iframe reported ready');
-                isConnected = true;
-                retryCount = 0;
-                processQueue();
-            }
-        });
-        
-        // Set up retry logic
-        setTimeout(function checkConnection() {
-            if (!isConnected && messageQueue.length > 0) {
-                console.log('[ChatClient] Trying to process queue...');
-                processQueue();
-            }
-            setTimeout(checkConnection, 5000); // Check every 5 seconds
-        }, 5000);
-        
-        return {
-            sendMessage,
-            getQueueLength: () => messageQueue.length,
-            isConnected: () => isConnected
         };
     }
     
-    // Return the public API
-    return init();
-})();
+    // Expose functions globally for other components to use
+    window.sendDirectMessageToChainlit = sendDirectMessageToChainlit;
+    window.navigateFromChat = navigateFromChat;
+    window.updateOrderFromChat = updateOrderFromChat;
+}
 
-// Make sure chat panel is visible when needed
-document.addEventListener('DOMContentLoaded', function() {
-    // Add click listeners to quick action buttons
-    const quickActionButtons = [
-        'quick-order-btn', 'quick-track-btn', 'quick-popular-btn', 'quick-hours-btn',
-        'faq-menu-btn', 'faq-hours-btn', 'faq-robot-btn', 'faq-popular-btn',
-        'menu-faq-btn', 'hours-faq-btn', 'robot-faq-btn', 'popular-faq-btn'
-    ];
+function setupSocketListeners() {
+    // Skip if socket not available
+    if (!window.chatSocket) return;
     
-    quickActionButtons.forEach(btnId => {
-        const btn = document.getElementById(btnId);
-        if (btn) {
-            btn.addEventListener('click', function() {
-                // Show chat panel
-                const panel = document.getElementById('floating-chat-panel');
-                if (panel) {
-                    panel.style.display = 'flex';
-                    panel.className = 'floating-chat-panel';
-                }
-            });
+    // Ensure we're not adding duplicate listeners
+    window.chatSocket.off('message_to_chainlit');
+    window.chatSocket.off('chat_message_from_dashboard');
+    window.chatSocket.off('navigation_command');
+    window.chatSocket.off('order_update');
+    
+    // Listen for messages to Chainlit
+    window.chatSocket.on('message_to_chainlit', function(data) {
+        console.log('Received message_to_chainlit:', data);
+        forwardMessageToChainlitIframe(data.message);
+    });
+    
+    // Listen for chat messages from dashboard
+    window.chatSocket.on('chat_message_from_dashboard', function(data) {
+        console.log('Received chat_message_from_dashboard:', data);
+        forwardMessageToChainlitIframe(data.message);
+    });
+    
+    // Listen for navigation commands
+    window.chatSocket.on('navigate_to', function(data) {
+        console.log('Received navigate_to:', data);
+        if (data && data.destination) {
+            navigateFromChat(data.destination);
         }
     });
+    
+    // Listen for order updates
+    window.chatSocket.on('order_update', function(data) {
+        console.log('Received order_update:', data);
+        if (data && data.id) {
+            updateOrderFromChat(data);
+        }
+    });
+    
+    console.log('Socket listeners setup complete');
+}
+
+function getSessionId() {
+    // Try to get from localStorage
+    let sessionId = localStorage.getItem('neocafe_session_id');
+    if (!sessionId) {
+        // Generate random ID
+        sessionId = Math.random().toString(36).substring(2, 15) + 
+                   Math.random().toString(36).substring(2, 15);
+        localStorage.setItem('neocafe_session_id', sessionId);
+    }
+    return sessionId;
+}
+
+function sendDirectMessageToChainlit(message) {
+    console.log('Sending message to Chainlit:', message);
+    
+    // Check if message is empty
+    if (!message || message.trim() === '') {
+        console.warn('Attempted to send empty message to Chainlit');
+        return false;
+    }
+    
+    // Try multiple methods to send message to ensure delivery
+    let successCount = 0;
+    
+    // Method 1: Socket.IO
+    if (window.chatSocket) {
+        try {
+            window.chatSocket.emit('direct_message_to_chainlit', {
+                message: message,
+                session_id: getSessionId()
+            });
+            console.log('Message sent via Socket.IO');
+            successCount++;
+        } catch (err) {
+            console.error('Failed to send message via Socket.IO:', err);
+        }
+    }
+    
+    // Method 2: iframe postMessage
+    try {
+        const iframe = document.getElementById('floating-chainlit-frame');
+        if (iframe && iframe.contentWindow) {
+            iframe.contentWindow.postMessage({
+                type: 'userMessage',
+                message: message
+            }, '*');
+            console.log('Message sent via iframe postMessage');
+            successCount++;
+        }
+    } catch (err) {
+        console.error('Failed to send message via iframe postMessage:', err);
+    }
+    
+    // Method 3: Direct message to window.sendMessage if available
+    try {
+        const iframe = document.getElementById('floating-chainlit-frame');
+        if (iframe && iframe.contentWindow && iframe.contentWindow.sendMessage) {
+            iframe.contentWindow.sendMessage(message);
+            console.log('Message sent via iframe.contentWindow.sendMessage');
+            successCount++;
+        }
+    } catch (err) {
+        console.error('Failed to send message via iframe.contentWindow.sendMessage:', err);
+    }
+    
+    // Check if message was sent successfully through any method
+    return successCount > 0;
+}
+
+function forwardMessageToChainlitIframe(message) {
+    // Method 1: Try using iframe postMessage
+    try {
+        const iframe = document.getElementById('floating-chainlit-frame');
+        if (iframe && iframe.contentWindow) {
+            iframe.contentWindow.postMessage({
+                type: 'userMessage',
+                message: message
+            }, '*');
+            console.log('Message forwarded to Chainlit iframe via postMessage');
+            return true;
+        }
+    } catch (err) {
+        console.error('Failed to forward message via iframe postMessage:', err);
+    }
+    
+    // Method 2: Try using sendMessage function in iframe if available
+    try {
+        const iframe = document.getElementById('floating-chainlit-frame');
+        if (iframe && iframe.contentWindow && iframe.contentWindow.sendMessage) {
+            iframe.contentWindow.sendMessage(message);
+            console.log('Message forwarded to Chainlit iframe via sendMessage function');
+            return true;
+        }
+    } catch (err) {
+        console.error('Failed to forward message via iframe sendMessage function:', err);
+    }
+    
+    console.warn('Failed to forward message to Chainlit iframe');
+    return false;
+}
+
+function navigateFromChat(destination) {
+    console.log('Navigating from chat to:', destination);
+    
+    // Validate destination
+    const validDestinations = ['menu', 'orders', 'delivery', 'profile', 'dashboard', 'home'];
+    
+    if (!validDestinations.includes(destination.toLowerCase())) {
+        console.warn('Invalid navigation destination:', destination);
+        return false;
+    }
+    
+    // Map destination to URL
+    const destinationMap = {
+        'menu': '/menu',
+        'orders': '/orders',
+        'delivery': '/delivery',
+        'profile': '/profile',
+        'dashboard': '/dashboard',
+        'home': '/'
+    };
+    
+    const targetUrl = destinationMap[destination.toLowerCase()] || '/';
+    
+    // Check if we need to navigate
+    if (window.location.pathname === targetUrl) {
+        console.log('Already on the requested page');
+        return true;
+    }
+    
+    // Trigger navigation
+    if (window.messageBridge && window.messageBridge.navigation.callback) {
+        // Use callback if available
+        window.messageBridge.navigation.callback(destination);
+        return true;
+    } else {
+        // Fallback to direct navigation
+        window.location.href = targetUrl;
+        return true;
+    }
+}
+
+function updateOrderFromChat(orderData) {
+    console.log('Updating order from chat:', orderData);
+    
+    // Validate order data
+    if (!orderData || !orderData.items) {
+        console.warn('Invalid order data received');
+        return false;
+    }
+    
+    // Store in localStorage for persistence
+    localStorage.setItem('current_order', JSON.stringify(orderData));
+    
+    // Call callback if available
+    if (window.messageBridge && window.messageBridge.orderUpdate.callback) {
+        window.messageBridge.orderUpdate.callback(orderData);
+        return true;
+    }
+    
+    // Dispatch custom event for components to listen for
+    const updateEvent = new CustomEvent('neo-cafe-order-update', {
+        detail: orderData,
+        bubbles: true
+    });
+    document.dispatchEvent(updateEvent);
+    
+    return true;
+}
+
+// Set up listener for messages from Chainlit iframe
+window.addEventListener('message', function(event) {
+    // Check if message is from our Chainlit iframe
+    const iframe = document.getElementById('floating-chainlit-frame');
+    if (iframe && event.source === iframe.contentWindow) {
+        console.log('Received message from Chainlit iframe:', event.data);
+        
+        // Handle different message types
+        if (event.data && event.data.type) {
+            switch (event.data.type) {
+                case 'navigation':
+                    if (event.data.destination) {
+                        navigateFromChat(event.data.destination);
+                    }
+                    break;
+                    
+                case 'order_update':
+                    if (event.data.order) {
+                        updateOrderFromChat(event.data.order);
+                    }
+                    break;
+                    
+                case 'iframe_ready':
+                    console.log('Chainlit iframe is ready');
+                    // You can add initialization code here if needed
+                    break;
+                    
+                default:
+                    console.log('Unhandled message type from Chainlit iframe:', event.data.type);
+            }
+        }
+    }
 });
