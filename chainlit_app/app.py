@@ -683,7 +683,7 @@ def navigate_to_page(destination):
         print(f"Navigate error: {e}")
         return f"Failed to navigate: {str(e)}"
     
-def list_menu_items():
+def list_menu_items(query:str = "") -> str:
     """List all available menu items for debugging."""
     if not menu_items:
         return "No menu items loaded."
@@ -1198,7 +1198,7 @@ def setup_langchain_agent(context):
             ),
             Tool(
                 name="ListMenuTool",
-                func=list_menu_items,
+                func=lambda _: list_menu_items(),
                 description="List all available menu items"
             ),
             Tool(
@@ -1324,6 +1324,91 @@ async def start():
     cl.user_session.set("agent", agent)
     await cl.Message(content=get_welcome_message(context)).send()
 
+@cl.on_window_message
+async def handle_window_message(message):
+    """
+    Handle messages from the parent window (Dash app).
+    Args:
+        message: Message content (string or dict).
+    """
+    print(f"Received window message: {message}")
+    actual_message = None
+    message_id = f"window_{time.time()}"
+    
+    if isinstance(message, dict):
+        if 'message' in message:
+            actual_message = message['message']
+            if 'id' in message:
+                message_id = f"window_{message['id']}"
+        elif 'kind' in message and message.get('kind') == 'user_message':
+            if 'data' in message and 'content' in message['data']:
+                actual_message = message['data']['content']
+    elif isinstance(message, str):
+        actual_message = message
+        
+    if actual_message:
+        print(f"Extracted message from window: {actual_message}")
+        await process_message(actual_message, message_id=message_id, source="window")
+    else:
+        print(f"Could not extract message from: {message}")
+
+async def process_message(message, message_id=None, source=None):
+    """
+    Process a user message and generate a response using the LangChain agent.
+    Args:
+        message (str): The user's input message.
+        message_id (str, optional): Unique identifier for the message.
+        source (str, optional): Source of the message.
+    """
+    global processed_message_ids
+    context = cl.user_session.get("context", {})
+    
+    if not message_id:
+        message_id = f"msg_{time.time()}"
+    if message_id in processed_message_ids:
+        print(f"Skipping already processed message: {message_id}")
+        return
+    processed_message_ids.add(message_id)
+
+    agent = cl.user_session.get("agent")
+    if not agent:
+        await cl.Message(content="I'm still initializing. Please try again in a moment.").send()
+        return
+
+    try:
+        # Build chat history from memory
+        memory = agent.memory
+        chat_history = "\n".join(
+            [f"{msg.type}: {msg.content}" 
+             for msg in memory.buffer
+             if isinstance(msg, (HumanMessage, AIMessage))]
+        )
+        
+        prompt = (
+            f"Conversation history:\n{chat_history}\n\n"
+            f"Current page: {context.get('current_page', 'home')}\n"
+            f"User: {message}\n"
+            f"Assistant:"
+        )
+        
+        print(f"Processing message with prompt:\n{prompt}")
+        response = await cl.make_async(agent.run)(prompt)
+        await cl.Message(content=response).send()
+        
+        # Log updated conversation memory
+        print("Updated conversation memory:")
+        for msg in memory.buffer:
+            print(f"{msg.type}: {msg.content}")
+            
+    except Exception as e:
+        print(f"Error processing message: {e}")
+        await cl.Message(
+            content="I'm having trouble processing your request. Could you try rephrasing?"
+        ).send()
+
+
+
+
 @cl.on_chat_end
 def on_chat_end():
     """Save conversation history when chat ends"""
@@ -1353,21 +1438,45 @@ def on_chat_end():
     conn.commit()
     conn.close()
 
+# @cl.on_message
+# async def on_message(message: cl.Message):
+#     """Process messages with full context handling"""
+#     agent = cl.user_session.get("agent")
+#     context = cl.user_session.get("context", {})
+    
+#     # Track message in session
+#     try:
+#         # Format input for LangChain agent
+#         response = await cl.make_async(agent.run)(message.content)
+#         track_message(response, is_user=False)
+#     except Exception as e:
+#         response = f"Sorry, I need help with that: {str(e)}"
+    
+#     await cl.Message(content=response).send()
+
 @cl.on_message
 async def on_message(message: cl.Message):
     """Process messages with full context handling"""
-    agent = cl.user_session.get("agent")
-    context = cl.user_session.get("context", {})
+    # Track user message first
+    track_message(message.content, is_user=True)
     
-    # Track message in session
     try:
-        # Format input for LangChain agent
-        response = await cl.make_async(agent.run)(message.content)
-        track_message(response, is_user=False)
+        # Process through centralized message handler
+        response = await process_message(
+            message=message.content,
+            message_id=f"chat_{message.id}",
+            source="chat"
+        )
+        
+        # Only send and track if we got a response
+        if response:
+            track_message(response, is_user=False)
+            await cl.Message(content=response).send()
+            
     except Exception as e:
-        response = f"Sorry, I need help with that: {str(e)}"
-    
-    await cl.Message(content=response).send()
+        error_response = f"Sorry, I need help with that: {str(e)}"
+        track_message(error_response, is_user=False)
+        await cl.Message(content=error_response).send()
 
 # ----- Enhanced Features -----
 
