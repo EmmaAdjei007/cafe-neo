@@ -76,8 +76,10 @@ def create_main_layout():
         html.Div(id='navigation-trigger', style={'display': 'none'}),
         
         # Add hidden divs for direct message support
-        # html.Div(id='direct-message-status', style={'display': 'none'}),
         html.Div(id='voice-status', style={'display': 'none'}),
+        
+        # Add hidden div for order updates
+        html.Div(id="socket-order-update", style={"display": "none"}),
         
         # Add stores and intervals
         *stores,
@@ -85,3 +87,54 @@ def create_main_layout():
     ])
     
     return layout
+
+def register_order_update_callback(app):
+    """
+    Register the clientside callback for order updates
+    This function should be called after the app is created
+    
+    Args:
+        app: The Dash app instance
+    """
+    app.clientside_callback(
+        """
+        function(n) {
+            if (!window._orderUpdateListenerInitialized) {
+                window._orderUpdateListenerInitialized = true;
+                
+                // Listen for order updates from socket.io
+                if (window.socket) {
+                    window.socket.on('order_update', function(data) {
+                        console.log('Order update received:', data);
+                        window._lastOrderUpdate = JSON.stringify(data);
+                        
+                        // Trigger callback by returning data
+                        if (window._dashCallbacks) {
+                            window._dashCallbacks.forEach(callback => callback());
+                        }
+                    });
+                } else {
+                    // Wait for socket to be available
+                    window._socketInitInterval = setInterval(function() {
+                        if (window.socket) {
+                            window.socket.on('order_update', function(data) {
+                                console.log('Order update received:', data);
+                                window._lastOrderUpdate = JSON.stringify(data);
+                                
+                                // Trigger callback by returning data
+                                if (window._dashCallbacks) {
+                                    window._dashCallbacks.forEach(callback => callback());
+                                }
+                            });
+                            clearInterval(window._socketInitInterval);
+                        }
+                    }, 1000);
+                }
+            }
+            
+            return window._lastOrderUpdate || null;
+        }
+        """,
+        Output("socket-order-update", "children"),
+        [Input("client-interval", "n_intervals")]
+    )

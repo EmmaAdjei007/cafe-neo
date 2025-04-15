@@ -731,70 +731,117 @@ def register_callbacks(app, socketio):
             return dbc.Alert("No order history found.", color="info")
     
     # Keep existing callbacks for orders table and order status
+    # Update this in app/callbacks/order_callbacks.py
+
     @app.callback(
         Output("orders-table-container", "children"),
         [
             Input("orders-update-interval", "n_intervals"),
             Input("order-status-store", "data"),
-            Input("order-filter", "value")
-        ]
+            Input("order-filter", "value"),
+            Input("socket-order-update", "children")  # Added input for Socket.IO updates
+        ],
+        [State("user-store", "data")]  # Added user data to get current user
     )
-    def update_orders_table(n_intervals, status_update, filter_value):
+    def update_orders_table(n_intervals, status_update, filter_value, socket_update, user_data):
         """Update the orders table with latest orders"""
-        # In a real app, this would fetch from a database
-        # For demo, using static data with simulated updates
+        ctx = callback_context
+        trigger_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
         
-        # Create sample orders with timestamps
-        current_time = datetime.now()
+        # Get orders from the database instead of using static data
+        try:
+            from app.data.database import get_orders, get_orders_by_username
+            
+            # If user is logged in, show their orders
+            if user_data and 'username' in user_data:
+                orders = get_orders_by_username(user_data['username'])
+                print(f"Loaded {len(orders)} orders for user {user_data['username']}")
+            else:
+                # For admin or demo, show all orders
+                orders = get_orders()
+                print(f"Loaded {len(orders)} orders (all users)")
+        except Exception as e:
+            print(f"Error loading orders from database: {e}")
+            # Fallback to static demo data if database query fails
+            current_time = datetime.now()
+            orders = [
+                {
+                    "id": "ORD-1234567",
+                    "customer": "John Doe",
+                    "items": ["Cappuccino", "Croissant"],
+                    "total": 8.50,
+                    "status": "Completed",
+                    "time": (current_time.replace(hour=current_time.hour-1)).strftime("%H:%M"),
+                    "location": "Table 3"
+                },
+                # Other demo orders...
+            ]
         
-        orders = [
-            {
-                "id": "ORD-1234567",
-                "customer": "John Doe",
-                "items": ["Cappuccino", "Croissant"],
-                "total": 8.50,
-                "status": "Completed",
-                "time": (current_time.replace(hour=current_time.hour-1)).strftime("%H:%M"),
-                "location": "Table 3"
-            },
-            {
-                "id": "ORD-1234568",
-                "customer": "Jane Smith",
-                "items": ["Latte", "Blueberry Muffin", "Orange Juice"],
-                "total": 12.75,
-                "status": "In Progress",
-                "time": (current_time.replace(minute=current_time.minute-15)).strftime("%H:%M"),
-                "location": "Table 7"
-            },
-            {
-                "id": "ORD-1234569",
-                "customer": "Bob Johnson",
-                "items": ["Espresso"],
-                "total": 3.25,
-                "status": "Ready",
-                "time": (current_time.replace(minute=current_time.minute-5)).strftime("%H:%M"),
-                "location": "Counter"
-            },
-            {
-                "id": "ORD-1234570",
-                "customer": "Alice Brown",
-                "items": ["Mocha", "Chocolate Cake"],
-                "total": 10.00,
-                "status": "In Progress",
-                "time": current_time.strftime("%H:%M"),
-                "location": "Delivery"
-            }
-        ]
+        # Check if we have an order update from socket
+        if trigger_id == "socket-order-update" and socket_update:
+            try:
+                new_order = json.loads(socket_update)
+                
+                # Check if this order is already in our list
+                existing_idx = next((i for i, order in enumerate(orders) if order['id'] == new_order['id']), None)
+                
+                if existing_idx is not None:
+                    # Update existing order
+                    orders[existing_idx].update(new_order)
+                    print(f"Updated order {new_order['id']} in table")
+                else:
+                    # Add new order to the beginning of the list
+                    # Format the items - convert from objects to strings if needed
+                    if 'items' in new_order and isinstance(new_order['items'], list):
+                        # Extract item names from different formats
+                        formatted_items = []
+                        for item in new_order['items']:
+                            if isinstance(item, dict):
+                                # Different item formats
+                                if 'name' in item:
+                                    formatted_items.append(item['name'])
+                                elif 'item_id' in item:
+                                    # Try to get name from menu items
+                                    try:
+                                        from app.data.database import get_menu_item_by_id
+                                        menu_item = get_menu_item_by_id(item['item_id'])
+                                        if menu_item:
+                                            formatted_items.append(menu_item['name'])
+                                        else:
+                                            formatted_items.append(f"Item #{item['item_id']}")
+                                    except:
+                                        formatted_items.append(f"Item #{item['item_id']}")
+                            elif isinstance(item, str):
+                                formatted_items.append(item)
+                        
+                        new_order['items'] = formatted_items
+                    
+                    # Set customer name if available
+                    if 'customer' not in new_order and user_data and 'username' in user_data:
+                        new_order['customer'] = user_data['username']
+                    elif 'customer' not in new_order:
+                        new_order['customer'] = "Guest"
+                    
+                    # Set time if not available
+                    if 'time' not in new_order:
+                        new_order['time'] = datetime.now().strftime("%H:%M")
+                    
+                    # Add to orders list
+                    orders.insert(0, new_order)
+                    print(f"Added new order {new_order['id']} to table")
+            except Exception as e:
+                print(f"Error processing socket order update: {e}")
         
-        # Apply filter if specified
-        if filter_value and filter_value != "All":
-            orders = [order for order in orders if order["status"] == filter_value]
-        
-        # If we have status updates, apply them
+        # Apply status updates from order status store
         if status_update:
             for order in orders:
                 if order["id"] == status_update["id"]:
                     order["status"] = status_update["status"]
+                    print(f"Updated status of order {order['id']} to {status_update['status']}")
+        
+        # Apply filter if specified
+        if filter_value and filter_value != "All":
+            orders = [order for order in orders if order.get("status") == filter_value]
         
         # Create table rows
         rows = []
@@ -809,10 +856,25 @@ def register_callbacks(app, socketio):
             }
             
             status_badge = dbc.Badge(
-                order["status"],
-                color=status_color_map.get(order["status"], "secondary"),
+                order.get("status", "New"),
+                color=status_color_map.get(order.get("status", "New"), "secondary"),
                 className="p-2"
             )
+            
+            # Format items for display
+            if isinstance(order.get("items"), list):
+                if all(isinstance(item, str) for item in order["items"]):
+                    items_display = ", ".join(order["items"])
+                else:
+                    # Handle complex item structures
+                    items_display = ", ".join([
+                        item["name"] if isinstance(item, dict) and "name" in item 
+                        else f"Item #{item['item_id']}" if isinstance(item, dict) and "item_id" in item
+                        else str(item)
+                        for item in order["items"]
+                    ])
+            else:
+                items_display = "No items"
             
             # Create action buttons
             action_buttons = html.Div([
@@ -835,18 +897,18 @@ def register_callbacks(app, socketio):
                     id={"type": "deliver-order-btn", "index": order["id"]},
                     color="success",
                     size="sm",
-                    disabled=order["status"] != "Ready"
+                    disabled=order.get("status") != "Ready"
                 )
             ], className="d-flex")
             
             # Create the table row
             row = html.Tr([
-                html.Td(order["time"]),
+                html.Td(order.get("time", "")),
                 html.Td(order["id"]),
-                html.Td(order["customer"]),
-                html.Td(", ".join(order["items"])),
-                html.Td(f"${order['total']:.2f}"),
-                html.Td(order["location"]),
+                html.Td(order.get("customer", "Guest")),
+                html.Td(items_display),
+                html.Td(f"${order.get('total', 0):.2f}"),
+                html.Td(order.get("location", order.get("delivery_location", "Unknown"))),
                 html.Td(status_badge),
                 html.Td(action_buttons)
             ])

@@ -470,23 +470,48 @@ class OrderManager:
             
             # Step 7: Notify dashboard (original functionality)
             try:
-                cl.send_to_parent({
-                    "type": "order_update", 
-                    "order": order_data
-                })
-                print("Notification sent to parent")
-            except Exception as e:
-                print(f"Error sending order via cl.send_to_parent: {e}")
+                # Method 1: Send to parent window using postMessage
+                try:
+                    cl.send_to_parent({
+                        "type": "order_update", 
+                        "order": order_data
+                    })
+                    print("Order notification sent to parent via postMessage")
+                except Exception as e:
+                    print(f"Error sending order via cl.send_to_parent: {e}")
                 
-            try:
-                response = requests.post(
-                    f"{DASHBOARD_URL}/api/place-order", 
-                    json=order_data, 
-                    timeout=5
-                )
-                print(f"Place order API response: {response.status_code}")
+                # Method 2: Try Socket.IO if available
+                try:
+                    import socketio
+                    sio = socketio.Client()
+                    sio.connect(DASHBOARD_URL)
+                    sio.emit('order_update', order_data)
+                    sio.disconnect()
+                    print("Order sent via Socket.IO")
+                except Exception as e:
+                    print(f"Error sending order via Socket.IO: {e}")
+                    
+                # Method 3: Try REST API
+                try:
+                    response = requests.post(
+                        f"{DASHBOARD_URL}/api/place-order", 
+                        json=order_data, 
+                        timeout=5
+                    )
+                    print(f"Place order API response: {response.status_code}")
+                except Exception as e:
+                    print(f"Error calling place-order API: {e}")
+                    
+                # Method 4: Write to file as last resort
+                try:
+                    os.makedirs('order_data', exist_ok=True)
+                    with open(f"order_data/order_{order_data['id']}.json", 'w') as f:
+                        json.dump(order_data, f)
+                    print(f"Order saved to file as fallback")
+                except Exception as e:
+                    print(f"Error saving order to file: {e}")
             except Exception as e:
-                print(f"Error calling place-order API: {e}")
+                print(f"Error in dashboard notification: {e}")
                 
             return order_data
         except Exception as e:

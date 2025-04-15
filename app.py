@@ -26,6 +26,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Import app components
 from app.layouts import create_main_layout
 from app.callbacks import register_all_callbacks
+from app.layouts import register_order_update_callback
 from app.config import config
 from server import configure_server
 
@@ -107,6 +108,7 @@ configure_server(server, socketio)
 app.layout = create_main_layout()
 
 # Register all callbacks
+register_order_update_callback(app)
 register_all_callbacks(app, socketio)
 
 # This is now handled by run_with_eventlet.py

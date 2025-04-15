@@ -266,3 +266,84 @@ def configure_server(server, socketio):
         except Exception as e:
             print(f"Error in handle_chat_message_from_dashboard: {e}")
             return {'status': 'error', 'message': str(e)}
+        
+    # Update this in server.py to improve order handling
+
+    # Enhanced order update handler
+    @socketio.on('order_update')
+    def handle_order_update(data):
+        """
+        Handle order updates from any source and broadcast to all clients
+        
+        Args:
+            data (dict): Order data
+        """
+        try:
+            print(f"Order update received: {data}")
+            
+            # Ensure data is in the right format
+            if not isinstance(data, dict):
+                print(f"Invalid order data format: {type(data)}")
+                return {"status": "error", "message": "Invalid data format"}
+                
+            # Make sure there's an order ID
+            if 'id' not in data:
+                print("Order update missing ID")
+                return {"status": "error", "message": "Order ID is required"}
+            
+            # Store the order in the database if it's a new order or update an existing one
+            try:
+                from app.data.database import create_order, update_order
+                
+                # Check if order already exists
+                from app.data.database import get_order_by_id
+                existing_order = get_order_by_id(data['id'])
+                
+                if existing_order:
+                    # Update existing order
+                    update_order(data['id'], data)
+                    print(f"Updated existing order {data['id']}")
+                else:
+                    # Create new order
+                    create_order(data)
+                    print(f"Created new order {data['id']}")
+            except Exception as db_error:
+                print(f"Database error: {db_error}")
+            
+            # Broadcast the order update to all clients
+            socketio.emit('order_update', data)
+            
+            # Also update the hidden div for compatibility with Dash callbacks
+            socketio.emit('update_order_status', json.dumps(data))
+            
+            # Return success
+            return {"status": "success", "message": "Order update broadcast successfully"}
+        except Exception as e:
+            print(f"Error handling order update: {e}")
+            return {"status": "error", "message": str(e)}
+
+    # Also add a specific handler for new orders from Chainlit
+    @socketio.on('new_order')
+    def handle_new_order(data):
+        """
+        Handle new orders specifically from Chainlit
+        
+        Args:
+            data (dict): Order data
+        """
+        try:
+            print(f"New order received from Chainlit: {data}")
+            
+            # Process through the main order update handler
+            result = handle_order_update(data)
+            
+            # Additional processing specific to new orders
+            # Update user's active order if applicable
+            if 'user_id' in data:
+                # This would update the user's active order in your user management system
+                pass
+            
+            return result
+        except Exception as e:
+            print(f"Error handling new order: {e}")
+            return {"status": "error", "message": str(e)}
