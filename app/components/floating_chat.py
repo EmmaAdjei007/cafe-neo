@@ -37,11 +37,20 @@ def create_floating_chat():
                     ),
             html.Div(
                 [
+                    # Added expand button
                     html.Button(
                         [
-                            # Use both Font Awesome and HTML entity for minus
+                            html.I(className="fas fa-expand me-1"),
+                            html.Span("⤢", className="btn-symbol")
+                        ],
+                        id="expand-chat-button",
+                        className="chat-control-button me-2",
+                        title="Expand Chat"
+                    ),
+                    html.Button(
+                        [
                             html.I(className="fas fa-minus me-1"),
-                            html.Span("−", className="btn-symbol")  # Unicode minus symbol
+                            html.Span("−", className="btn-symbol")
                         ],
                         id="minimize-chat-button",
                         className="chat-control-button me-2",
@@ -49,9 +58,8 @@ def create_floating_chat():
                     ),
                     html.Button(
                         [
-                            # Use both Font Awesome and HTML entity for X
                             html.I(className="fas fa-times me-1"),
-                            html.Span("×", className="btn-symbol")  # Unicode multiplication X
+                            html.Span("×", className="btn-symbol")
                         ],
                         id="close-chat-button",
                         className="chat-control-button",

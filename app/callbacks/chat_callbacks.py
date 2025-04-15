@@ -32,7 +32,8 @@ def register_callbacks(app, socketio):
             return socket_data
         return dash.no_update
 
-    # Floating chat panel toggle callbacks
+    # Updated callback function for toggle_chat_panel in app/callbacks/chat_callbacks.py
+
     @app.callback(
         [
             Output('floating-chat-panel', 'style'),
@@ -43,7 +44,8 @@ def register_callbacks(app, socketio):
             Input('floating-chat-button', 'n_clicks'),
             Input('close-chat-button', 'n_clicks'),
             Input('minimize-chat-button', 'n_clicks'),
-            Input('floating-chat-socket-update', 'data-open-chat')  # Updated ID
+            Input('expand-chat-button', 'n_clicks'),  # Added input for expand button
+            Input('floating-chat-socket-update', 'data-open-chat')
         ],
         [
             State('floating-chat-panel', 'style'),
@@ -51,7 +53,7 @@ def register_callbacks(app, socketio):
             State('chat-faq-section', 'style')
         ]
     )
-    def toggle_chat_panel(open_clicks, close_clicks, minimize_clicks, open_chat_data,
+    def toggle_chat_panel(open_clicks, close_clicks, minimize_clicks, expand_clicks, open_chat_data,
                         current_style, current_class, faq_style):
         """Toggle the floating chat panel visibility and state"""
         ctx = callback_context
@@ -81,11 +83,11 @@ def register_callbacks(app, socketio):
         hide_faq = {"display": "none"}
         
         # Socket.IO triggered open
-        if button_id == 'socket-chat-update' and open_chat_data:
+        if button_id == 'floating-chat-socket-update' and open_chat_data:
             # Socket.IO is requesting to open the chat
             return visible_style, base_class, hide_faq
         
-        # FIXED LOGIC FOR EACH BUTTON
+        # Handle buttons for different states
         if button_id == "floating-chat-button":
             # If panel is hidden, show it
             if current_display == "none":
@@ -105,6 +107,14 @@ def register_callbacks(app, socketio):
             # Otherwise minimize it
             else:
                 return visible_style, minimized_class, hide_faq
+                
+        elif button_id == "expand-chat-button":
+            # If already expanded, restore to normal
+            if is_expanded:
+                return visible_style, base_class, hide_faq
+            # Otherwise expand it
+            else:
+                return visible_style, expanded_class, show_faq
                 
         # Default: no change
         return current_style or hidden_style, current_class or base_class, faq_style or hide_faq

@@ -1,211 +1,156 @@
-/* assets/css/floating_chat.css */
+/* Floating Chat CSS */
 
-/* Base styles for floating chat */
+/* Button styling */
 .floating-chat-button-container {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    z-index: 1000;
-  }
-  
-  .floating-chat-button {
-    padding: 0.75rem 1.25rem;
-    background-color: var(--bs-primary, #6F4E37);
-    color: white;
-    border: none;
-    border-radius: 30px;
-    cursor: pointer;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    display: flex;
-    align-items: center;
-    transition: all 0.3s ease;
-  }
-  
-  .floating-chat-button:hover {
-    background-color: var(--bs-primary-dark, #5a3c28);
-    transform: translateY(-2px);
-    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
-  }
-  
-  .chat-button-text {
-    margin-left: 0.5rem;
-  }
-  
-  /* Floating chat panel styles */
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 1000;
+}
+
+.floating-chat-button {
+  background-color: #6F4E37;
+  color: white;
+  border: none;
+  border-radius: 50px;
+  padding: 12px 20px;
+  font-size: 16px;
+  cursor: pointer;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+}
+
+.floating-chat-button:hover {
+  background-color: #5d4130;
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.3);
+}
+
+.chat-button-text {
+  margin-left: 8px;
+}
+
+/* Panel styling */
+.floating-chat-panel {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 700px;  /* Increased width for better usability */
+  height: 600px; /* Increased height for better usability */
+  background-color: white;
+  border-radius: 10px;
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  z-index: 1000;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+/* For smaller screens (tablet) */
+@media (max-width: 992px) {
   .floating-chat-panel {
-    position: fixed;
-    bottom: 90px;
-    right: 20px;
-    width: 90vw;
-    max-width: 400px;
-    height: 70vh;
-    max-height: 600px;
-    z-index: 1000;
-    background-color: white;
-    border-radius: 10px;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    transition: height 0.3s ease, width 0.3s ease;
+      width: 80%;
+      height: 500px;
   }
-  
-  /* Responsive sizing for different screen sizes */
-  @media (min-width: 768px) {
-    .floating-chat-panel {
-      width: 35vw;
-      max-width: 420px;
-      height: 70vh;
-    }
-  }
-  
-  @media (min-width: 1200px) {
-    .floating-chat-panel {
-      width: 25vw;
-      max-width: 450px;
-      height: 65vh;
-    }
-  }
-  
-  /* For extra large screens, make sure the chat isn't too small relative to screen */
-  @media (min-width: 1600px) {
-    .floating-chat-panel {
-      max-width: 480px; /* Slightly larger max-width */
-      min-width: 400px; /* Ensure it's not too small */
-    }
-  }
-  
-  /* When in a narrower window (e.g., half-screen mode) */
-  @media (max-width: 960px) and (min-width: 600px) {
-    .floating-chat-panel {
-      width: 45%;
-      max-width: 450px;
-      height: 75vh;
-    }
-  }
-  
-  /* When the panel is in minimized state */
-  .floating-chat-panel.minimized {
-    height: 60px !important; /* Use !important to override media queries */
-    overflow: hidden;
-  }
-  
-  /* Panel transitions for smooth animations */
+}
+
+/* For mobile screens */
+@media (max-width: 576px) {
   .floating-chat-panel {
-    transition: height 0.3s ease, width 0.3s ease;
+      width: 90%;
+      height: 450px;
+      bottom: 10px;
+      right: 5%;
+      left: 5%;
   }
-  
-  /* Chat panel header */
-  .chat-panel-header {
-    padding: 15px;
-    border-bottom: 1px solid #e9ecef;
-    background-color: var(--bs-primary, #6F4E37);
-    color: white;
-    flex-shrink: 0; /* Prevent header from shrinking */
-  }
-  
-  /* Control buttons in header */
-  .chat-control-button {
-    background: rgba(255, 255, 255, 0.2);
-    border: none;
-    color: white;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    transition: background 0.2s ease;
-  }
-  
-  .chat-control-button:hover {
-    background: rgba(255, 255, 255, 0.3);
-  }
-  
-  /* Split view for chat panel body */
-  .chat-panel-body {
-    flex: 1;
-    overflow: hidden;
-    display: flex;
-  }
-  
-  .chat-panel-body-left {
-    flex: 2;
-    overflow: hidden;
-    border-right: 1px solid #e9ecef;
-    min-width: 0; /* Allow content to shrink below min-content width */
-  }
-  
-  .chat-panel-body-right {
-    flex: 1;
-    overflow-y: auto;
-    padding: 15px;
-    min-width: 0; /* Allow content to shrink below min-content width */
-  }
-  
-  /* When the window is narrow, stack the body sections */
-  @media (max-width: 500px) {
-    .chat-panel-body {
-      flex-direction: column;
-    }
-    
-    .chat-panel-body-left {
-      flex: 3;
-      border-right: none;
-      border-bottom: 1px solid #e9ecef;
-    }
-    
-    .chat-panel-body-right {
-      flex: 2;
-    }
-  }
-  
-  /* Footer with quick access buttons */
-  .chat-panel-footer {
-    padding: 10px 15px;
-    border-top: 1px solid #e9ecef;
-    background-color: #f8f9fa;
-    flex-shrink: 0; /* Prevent footer from shrinking */
-  }
-  
-  /* FAQ section */
-  #chat-faq-section {
-    margin-top: 15px;
-    overflow-y: auto;
-    max-height: 200px;
-  }
-  
-  /* When in a small viewport make sure elements stay visible */
-  @media (max-height: 700px) {
-    .floating-chat-panel {
-      height: 80vh;
-      bottom: 70px;
-    }
-  }
-  
-  /* Ensure the iframe takes up the full available space */
-  #floating-chainlit-frame {
-    width: 100%;
-    height: 100%;
-    border: none;
-  }
-  
-  /* Hide scrollbars but keep functionality */
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-  
-  ::-webkit-scrollbar-track {
-    background: #f1f1f1;
-  }
-  
-  ::-webkit-scrollbar-thumb {
-    background: #c1c1c1;
-    border-radius: 3px;
-  }
-  
-  ::-webkit-scrollbar-thumb:hover {
-    background: #a8a8a8;
-  }
+}
+
+/* Minimized state */
+.floating-chat-panel.minimized {
+  height: 60px;
+  overflow: hidden;
+}
+
+/* Expanded state for full window mode */
+.floating-chat-panel.expanded {
+  width: 85%;
+  height: 80vh;
+  max-height: 800px;
+  bottom: 5%;
+  right: 7.5%;
+}
+
+/* Header styling */
+.chat-panel-header {
+  background-color: #6F4E37;
+  color: white;
+  padding: 15px;
+  border-radius: 10px 10px 0 0;
+  flex-shrink: 0;
+}
+
+.chat-control-button {
+  background: transparent;
+  border: none;
+  color: white;
+  cursor: pointer;
+  font-size: 16px;
+  margin-left: 5px;
+}
+
+.chat-control-button:hover {
+  color: #e0e0e0;
+}
+
+/* Body styling */
+.chat-panel-body {
+  flex-grow: 1;
+  overflow: hidden;
+  display: flex;
+}
+
+/* Left side (iframe) */
+.chat-panel-body-left {
+  flex: 2;
+  overflow: hidden;
+  position: relative;
+}
+
+/* Right side (quick actions) */
+.chat-panel-body-right {
+  flex: 1;
+  padding: 15px;
+  overflow-y: auto;
+  background-color: #f8f9fa;
+  border-left: 1px solid #e0e0e0;
+}
+
+/* Footer styling */
+.chat-panel-footer {
+  background-color: #f8f9fa;
+  border-top: 1px solid #e0e0e0;
+  padding: 10px 15px;
+  flex-shrink: 0;
+}
+
+/* Add an expand button to toggle fullscreen mode */
+.expand-chat-button {
+  color: white;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  margin-right: 10px;
+}
+
+.expand-chat-button:hover {
+  color: #e0e0e0;
+}
+
+/* In minimized mode, hide body and footer */
+.floating-chat-panel.minimized .chat-panel-body,
+.floating-chat-panel.minimized .chat-panel-footer {
+  display: none;
+}
