@@ -1,316 +1,3 @@
-# # File: app/callbacks/order_callbacks.py
-
-# from dash import Input, Output, State, callback_context, html, ALL  # Add ALL import
-# import dash_bootstrap_components as dbc
-# import json
-# import time
-# from datetime import datetime
-# from app.utils.api_utils import place_order, update_order_status
-
-# def register_callbacks(app, socketio):
-#     """
-#     Register callbacks for order management
-    
-#     Args:
-#         app: Dash application instance
-#         socketio: SocketIO instance for real-time communication
-#     """
-#     @app.callback(
-#         Output("cart-alert", "children"),
-#         [Input("cart-store", "data")],
-#         [State("cart-store", "data")]
-#     )
-#     def update_cart_alert(data, current_cart):
-#         """Show alert when cart is updated"""
-#         if not data or not current_cart:
-#             return html.Div()
-        
-#         # Check if items were added to cart
-#         if len(current_cart) > 0:
-#             # Calculate total items and price
-#             total_items = sum(item.get("quantity", 1) for item in current_cart)
-#             total_price = sum(item.get("price", 0) * item.get("quantity", 1) for item in current_cart)
-            
-#             alert = dbc.Alert(
-#                 [
-#                     html.I(className="fas fa-shopping-cart me-2"),
-#                     f"Cart updated: {total_items} items (${total_price:.2f}) ",
-#                     dbc.Button("View Cart", color="light", size="sm", href="/orders", className="ms-2")
-#                 ],
-#                 color="success",
-#                 dismissable=True,
-#                 is_open=True,
-#                 duration=4000,
-#                 className="position-fixed bottom-0 end-0 m-3",
-#                 style={"zIndex": 1050, "minWidth": "300px"}
-#             )
-            
-#             return alert
-        
-#         return html.Div()
-    
-#     @app.callback(
-#         Output("orders-table-container", "children"),
-#         [
-#             Input("orders-update-interval", "n_intervals"),
-#             Input("order-status-store", "data"),
-#             Input("order-filter", "value")
-#         ]
-#     )
-#     def update_orders_table(n_intervals, status_update, filter_value):
-#         """Update the orders table with latest orders"""
-#         # In a real app, this would fetch from a database
-#         # For demo, using static data with simulated updates
-        
-#         # Create sample orders with timestamps
-#         current_time = datetime.now()
-        
-#         orders = [
-#             {
-#                 "id": "ORD-1234567",
-#                 "customer": "John Doe",
-#                 "items": ["Cappuccino", "Croissant"],
-#                 "total": 8.50,
-#                 "status": "Completed",
-#                 "time": (current_time.replace(hour=current_time.hour-1)).strftime("%H:%M"),
-#                 "location": "Table 3"
-#             },
-#             {
-#                 "id": "ORD-1234568",
-#                 "customer": "Jane Smith",
-#                 "items": ["Latte", "Blueberry Muffin", "Orange Juice"],
-#                 "total": 12.75,
-#                 "status": "In Progress",
-#                 "time": (current_time.replace(minute=current_time.minute-15)).strftime("%H:%M"),
-#                 "location": "Table 7"
-#             },
-#             {
-#                 "id": "ORD-1234569",
-#                 "customer": "Bob Johnson",
-#                 "items": ["Espresso"],
-#                 "total": 3.25,
-#                 "status": "Ready",
-#                 "time": (current_time.replace(minute=current_time.minute-5)).strftime("%H:%M"),
-#                 "location": "Counter"
-#             },
-#             {
-#                 "id": "ORD-1234570",
-#                 "customer": "Alice Brown",
-#                 "items": ["Mocha", "Chocolate Cake"],
-#                 "total": 10.00,
-#                 "status": "In Progress",
-#                 "time": current_time.strftime("%H:%M"),
-#                 "location": "Delivery"
-#             }
-#         ]
-        
-#         # Apply filter if specified
-#         if filter_value and filter_value != "All":
-#             orders = [order for order in orders if order["status"] == filter_value]
-        
-#         # If we have status updates, apply them
-#         if status_update:
-#             for order in orders:
-#                 if order["id"] == status_update["id"]:
-#                     order["status"] = status_update["status"]
-        
-#         # Create table rows
-#         rows = []
-#         for order in orders:
-#             # Create status badge with appropriate color
-#             status_color_map = {
-#                 "New": "secondary",
-#                 "In Progress": "primary",
-#                 "Ready": "info",
-#                 "Completed": "success",
-#                 "Cancelled": "danger"
-#             }
-            
-#             status_badge = dbc.Badge(
-#                 order["status"],
-#                 color=status_color_map.get(order["status"], "secondary"),
-#                 className="p-2"
-#             )
-            
-#             # Create action buttons
-#             action_buttons = html.Div([
-#                 dbc.Button(
-#                     html.I(className="fas fa-eye"),
-#                     id={"type": "view-order-btn", "index": order["id"]},
-#                     color="primary",
-#                     size="sm",
-#                     className="me-1"
-#                 ),
-#                 dbc.Button(
-#                     html.I(className="fas fa-edit"),
-#                     id={"type": "edit-order-btn", "index": order["id"]},
-#                     color="secondary",
-#                     size="sm",
-#                     className="me-1"
-#                 ),
-#                 dbc.Button(
-#                     html.I(className="fas fa-robot"),
-#                     id={"type": "deliver-order-btn", "index": order["id"]},
-#                     color="success",
-#                     size="sm",
-#                     disabled=order["status"] != "Ready"
-#                 )
-#             ], className="d-flex")
-            
-#             # Create the table row
-#             row = html.Tr([
-#                 html.Td(order["time"]),
-#                 html.Td(order["id"]),
-#                 html.Td(order["customer"]),
-#                 html.Td(", ".join(order["items"])),
-#                 html.Td(f"${order['total']:.2f}"),
-#                 html.Td(order["location"]),
-#                 html.Td(status_badge),
-#                 html.Td(action_buttons)
-#             ])
-            
-#             rows.append(row)
-        
-#         # Create the table
-#         if rows:
-#             table = dbc.Table(
-#                 [
-#                     html.Thead(
-#                         html.Tr([
-#                             html.Th("Time"),
-#                             html.Th("Order ID"),
-#                             html.Th("Customer"),
-#                             html.Th("Items"),
-#                             html.Th("Total"),
-#                             html.Th("Location"),
-#                             html.Th("Status"),
-#                             html.Th("Actions")
-#                         ])
-#                     ),
-#                     html.Tbody(rows)
-#                 ],
-#                 className="order-table",
-#                 bordered=True,
-#                 hover=True,
-#                 responsive=True,
-#                 striped=True
-#             )
-            
-#             return table
-#         else:
-#             return html.Div(
-#                 dbc.Alert("No orders found matching the current filter.", color="info"),
-#                 className="text-center p-4"
-#             )
-    
-#     @app.callback(
-#         Output("order-status-store", "data"),
-#         [
-#             Input({"type": "status-change-btn", "index": ALL}, "n_clicks"),  # Changed "all" to ALL
-#             Input("socket-order-update", "children")  # Hidden div updated by SocketIO
-#         ],
-#         [
-#             State({"type": "status-change-btn", "index": ALL}, "id"),  # Changed "all" to ALL
-#             State("order-status-store", "data")
-#         ],
-#         prevent_initial_call=True  # Added to prevent initial callback
-#     )
-#     def update_order_status_callback(n_clicks_list, socket_update, btn_ids, current_status):
-#         """Update order status when a status change button is clicked"""
-#         ctx = callback_context
-        
-#         # If triggered by socket update
-#         if ctx.triggered and "socket-order-update" in ctx.triggered[0]["prop_id"]:
-#             try:
-#                 # Parse the data from socket update
-#                 if socket_update:
-#                     update_data = json.loads(socket_update)
-#                     return update_data
-#             except:
-#                 pass
-        
-#         # If no button was clicked or no button IDs
-#         if not ctx.triggered or not btn_ids or "n_clicks" not in ctx.triggered[0]["prop_id"]:
-#             return current_status
-        
-#         # Find which button was clicked
-#         button_idx = ctx.triggered[0]["prop_id"].split(".")[0]
-        
-#         # Convert string representation to dictionary
-#         button_idx = json.loads(button_idx)
-        
-#         # Get the parts of the button ID
-#         order_id, new_status = button_idx["index"].split("-")
-        
-#         # Update the status via API (in production)
-#         # update_order_status(order_id, new_status)
-        
-#         # For demo, just return the new status
-#         return {"id": order_id, "status": new_status}
-    
-#     # SocketIO event handler for order updates
-#     @socketio.on('new_order')
-#     def handle_new_order(data):
-#         """Handle new order events from Chainlit"""
-#         # Broadcast the new order to all connected clients
-#         socketio.emit('order_update', data)
-        
-#         # In a real app, this would save to a database
-#         print(f"New order received: {data['id']}")
-        
-#         # Acknowledge receipt
-#         return {"status": "success", "message": "Order received"}
-    
-#     @app.callback(
-#         [
-#             Output("cart-items-container", "children"),
-#             Output("empty-cart-alert", "is_open"),
-#             Output("cart-subtotal", "children"),
-#             Output("cart-tax", "children"),
-#             Output("cart-total", "children"),
-#             Output("checkout-btn", "disabled")
-#         ],
-#         [Input("cart-store", "data")]
-#     )
-#     def update_cart_display(cart_data):
-#         """Update the cart display with items from cart-store"""
-        
-#         # Default values when cart is empty
-#         if not cart_data or len(cart_data) == 0:
-#             return (
-#                 None,
-#                 True,  # Show empty cart alert
-#                 "$0.00",
-#                 "$0.00",
-#                 "$0.00",
-#                 True  # Disable checkout button
-#             )
-        
-#         # Create table of items
-#         from app.components.tables import create_order_items_table
-#         items_table = create_order_items_table(cart_data)
-        
-#         # Calculate totals
-#         subtotal = sum(item.get("price", 0) * item.get("quantity", 1) for item in cart_data)
-#         tax = subtotal * 0.08  # Assuming 8% tax
-#         total = subtotal + tax
-        
-#         # Format currency values
-#         subtotal_formatted = f"${subtotal:.2f}"
-#         tax_formatted = f"${tax:.2f}"
-#         total_formatted = f"${total:.2f}"
-        
-#         return (
-#             items_table,
-#             False,  # Hide empty cart alert
-#             subtotal_formatted,
-#             tax_formatted,
-#             total_formatted,
-#             False  # Enable checkout button
-#         )
-
-# =====================================================
-
 # File: app/callbacks/order_callbacks.py
 
 from dash import Input, Output, State, callback_context, html, ALL, no_update
@@ -328,7 +15,220 @@ def register_callbacks(app, socketio):
     Args:
         app: Dash application instance
         socketio: SocketIO instance for real-time communication
+
     """
+
+    @app.callback(
+    Output("cart-store", "data", allow_duplicate=True),
+    [Input("socket-order-update", "children")],
+    [State("cart-store", "data")],
+    prevent_initial_call=True
+)
+    def update_cart_from_chainlit(socket_update, current_cart):
+        """Update cart when order comes from Chainlit"""
+        if not socket_update:
+            return no_update
+        
+        try:
+            # Parse the order data
+            order_data = json.loads(socket_update)
+            
+            # Verify this is a valid order with items
+            if not isinstance(order_data, dict) or 'items' not in order_data:
+                return no_update
+                
+            # Check if this is a new order (not an update)
+            if order_data.get('status', '').lower() in ['new', 'received']:
+                # Convert items to cart format
+                cart_items = []
+                
+                for item in order_data['items']:
+                    if isinstance(item, dict):
+                        cart_item = {}
+                        
+                        # Handle different item formats
+                        if 'item_id' in item:
+                            # Try to get item details from menu
+                            try:
+                                from app.data.database import get_menu_item_by_id
+                                menu_item = get_menu_item_by_id(item['item_id'])
+                                
+                                if menu_item:
+                                    cart_item = {
+                                        "id": menu_item["id"],
+                                        "name": menu_item["name"],
+                                        "price": menu_item.get("price", 0),
+                                        "quantity": item.get("quantity", 1)
+                                    }
+                                else:
+                                    # Fallback if menu item not found
+                                    cart_item = {
+                                        "id": item["item_id"],
+                                        "name": f"Item #{item['item_id']}",
+                                        "price": 0,
+                                        "quantity": item.get("quantity", 1)
+                                    }
+                            except Exception as e:
+                                print(f"Error getting menu item: {e}")
+                                cart_item = {
+                                    "id": item["item_id"],
+                                    "name": f"Item #{item['item_id']}",
+                                    "price": 0,
+                                    "quantity": item.get("quantity", 1)
+                                }
+                        elif 'id' in item and 'name' in item:
+                            # Already in correct format
+                            cart_item = item
+                        
+                        if cart_item:
+                            cart_items.append(cart_item)
+                
+                # If we have cart items, return them
+                if cart_items:
+                    print(f"Updating cart with {len(cart_items)} items from Chainlit order")
+                    return cart_items
+        
+        except Exception as e:
+            print(f"Error updating cart from Chainlit: {e}")
+        
+        return no_update
+    @app.callback(
+    [Output("order-details-modal", "is_open"),
+     Output("order-details-modal-body", "children")],
+    [Input("view-order-details-btn", "n_clicks")],
+    [State("user-store", "data")],
+    prevent_initial_call=True
+)
+    def open_order_details_from_chat(n_clicks, user_data):
+        """Open order details modal when View Details button is clicked in chat"""
+        if not n_clicks:
+            return False, None
+        
+        # Get active order from user data
+        active_order = None
+        if user_data and 'active_order' in user_data:
+            active_order = user_data.get('active_order')
+        
+        # If no active order in user data, try to get from database
+        if not active_order:
+            try:
+                from app.data.database import get_orders
+                orders = get_orders()
+                if orders:
+                    active_order = orders[0]  # Get most recent order
+            except Exception as e:
+                print(f"Error getting orders: {e}")
+        
+        # If still no active order, return empty modal
+        if not active_order:
+            return True, html.P("No order details available.")
+        
+        # Create modal content
+        modal_content = html.Div([
+            html.H5(f"Order #{active_order['id']}", className="mb-3"),
+            html.P([
+                html.Strong("Status: "),
+                html.Span(active_order.get('status', 'New'), 
+                        className=f"text-{get_status_color(active_order.get('status', 'New'))}")
+            ]),
+            
+            # Items table
+            html.H6("Items:", className="mt-4 mb-2"),
+            create_order_items_display(active_order.get('items', [])),
+            
+            # Order details
+            html.Div([
+                html.P([
+                    html.Strong("Total: "),
+                    html.Span(f"${active_order.get('total', 0):.2f}")
+                ]),
+                html.P([
+                    html.Strong("Delivery: "),
+                    html.Span(active_order.get('delivery_location', 'Not specified'))
+                ]),
+                html.P([
+                    html.Strong("Special Instructions: "),
+                    html.Span(active_order.get('special_instructions', 'None'))
+                ]),
+                html.P([
+                    html.Strong("Date: "),
+                    html.Span(active_order.get('date', 'Unknown'))
+                ])
+            ], className="mt-3")
+        ])
+        
+        return True, modal_content
+
+    def create_order_items_display(items):
+        """Create a display table for order items"""
+        if not items:
+            return html.P("No items in this order.")
+        
+        # Try to get menu items for item names
+        try:
+            from app.data.database import get_menu_items
+            menu_items = get_menu_items()
+        except:
+            menu_items = []
+        
+        # Create table rows
+        rows = []
+        for item in items:
+            # Get item name based on item_id
+            item_name = "Unknown Item"
+            item_price = 0
+            
+            # If item has a direct name, use it
+            if isinstance(item, dict):
+                if "name" in item:
+                    item_name = item["name"]
+                    item_price = item.get("price", 0)
+                elif "item_id" in item and menu_items:
+                    # Look up item in menu
+                    menu_item = next((mi for mi in menu_items if mi["id"] == item["item_id"]), None)
+                    if menu_item:
+                        item_name = menu_item["name"]
+                        item_price = menu_item.get("price", 0)
+                    else:
+                        item_name = f"Item #{item['item_id']}"
+                
+                # Get quantity
+                quantity = item.get("quantity", 1)
+                
+                # Calculate subtotal
+                subtotal = quantity * item_price
+                
+                # Create row
+                row = html.Tr([
+                    html.Td(item_name),
+                    html.Td(f"${item_price:.2f}"),
+                    html.Td(quantity),
+                    html.Td(f"${subtotal:.2f}")
+                ])
+                
+                rows.append(row)
+        
+        # Create the table
+        table = dbc.Table(
+            [
+                html.Thead(
+                    html.Tr([
+                        html.Th("Item"),
+                        html.Th("Price"),
+                        html.Th("Quantity"),
+                        html.Th("Subtotal")
+                    ])
+                ),
+                html.Tbody(rows)
+            ],
+            bordered=True,
+            hover=True,
+            striped=True,
+            size="sm"
+        )
+        
+        return table
+    
     @app.callback(
         Output("cart-alert", "children"),
         [Input("cart-store", "data")],

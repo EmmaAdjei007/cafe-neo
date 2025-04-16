@@ -13,19 +13,19 @@ def register_callbacks(app):
         app: Dash application instance
     """
     @app.callback(
-        [
-            Output('page-content', 'children'),
-            Output('tab-content', 'children'),
-            Output('active-tab-store', 'data'),
-            Output('floating-chat-panel', 'style', allow_duplicate=True)  # Added to control chat visibility
-        ],
-        [Input('url', 'pathname')],
-        [
-            State('active-tab-store', 'data'),
-            State('floating-chat-panel', 'style')
-        ],
-        prevent_initial_call=True
-    )
+    [
+        Output('page-content', 'children'),
+        Output('tab-content', 'children'),
+        Output('active-tab-store', 'data'),
+        Output('floating-chat-panel', 'style', allow_duplicate=True)  # Added to control chat visibility
+    ],
+    [Input('url', 'pathname')],
+    [
+        State('active-tab-store', 'data'),
+        State('floating-chat-panel', 'style')
+    ],
+    prevent_initial_call=True
+)
     def display_page(pathname, active_tab, chat_style):
         """Route to the appropriate page based on URL pathname"""
         from app.layouts.landing import layout as landing_layout

@@ -475,6 +475,7 @@ def register_callbacks(app, socketio):
 
 
 # Helper function for order status colors
+# Helper function for order status colors
 def get_status_color(status):
     """Get appropriate Bootstrap color class for order status"""
     status_lower = status.lower() if status else ""

@@ -12,6 +12,42 @@ def register_callbacks(app):
     Args:
         app: Dash application instance
     """
+
+    @app.callback(
+    Output("user-store", "data", allow_duplicate=True),
+    [Input("socket-order-update", "children")],
+    [State("user-store", "data")],
+    prevent_initial_call=True
+)
+    def update_user_active_order(socket_update, current_user):
+        """Update user's active order when a new order is received"""
+        if not socket_update or not current_user:
+            return dash.no_update
+        
+        try:
+            # Parse the order data
+            order_data = json.loads(socket_update)
+            
+            # Verify this is a valid order
+            if not isinstance(order_data, dict) or 'id' not in order_data:
+                return dash.no_update
+            
+            # Check if this order belongs to the current user
+            # If user_id is in the order data, check if it matches
+            if 'user_id' in order_data and order_data['user_id'] != current_user.get('username'):
+                return dash.no_update
+            
+            # Update the user's active order
+            updated_user = dict(current_user)
+            updated_user['active_order'] = order_data
+            
+            print(f"Updated user's active order to {order_data['id']}")
+            return updated_user
+        
+        except Exception as e:
+            print(f"Error updating user's active order: {e}")
+            return dash.no_update
+
     @app.callback(
         [
             Output("login-alert", "children"),

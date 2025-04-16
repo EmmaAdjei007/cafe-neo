@@ -270,6 +270,7 @@ def configure_server(server, socketio):
     # Update this in server.py to improve order handling
 
     # Enhanced order update handler
+    # Enhanced order update handler
     @socketio.on('order_update')
     def handle_order_update(data):
         """
