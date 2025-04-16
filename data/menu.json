@@ -1,1 +1,146 @@
-[{"name": "Cappuccino", "price": 4.5, "description": "Classic Italian coffee", "category": "Coffee", "image": "cappuccino.jpg"}, {"name": "Croissant", "price": 3.75, "description": "French butter croissant", "category": "Pastry", "image": "croissant.jpg"}]
+[
+    {
+      "id": 1,
+      "name": "Espresso",
+      "description": "Rich and complex, our signature espresso blend has notes of cocoa and caramel.",
+      "price": 2.95,
+      "category": "coffee",
+      "image": "espresso.jpg",
+      "popular": true,
+      "vegetarian": true,
+      "vegan": true,
+      "gluten_free": true
+    },
+    {
+      "id": 2,
+      "name": "Cappuccino",
+      "description": "Espresso with steamed milk and a deep layer of foam.",
+      "price": 4.25,
+      "category": "coffee",
+      "image": "cappuccino.jpg",
+      "popular": true,
+      "vegetarian": true,
+      "vegan": false,
+      "gluten_free": true
+    },
+    {
+      "id": 3,
+      "name": "Latte",
+      "description": "Smooth espresso with steamed milk and a light layer of foam.",
+      "price": 4.50,
+      "category": "coffee",
+      "image": "latte.jpg",
+      "popular": true,
+      "vegetarian": true,
+      "vegan": false,
+      "gluten_free": true
+    },
+    {
+      "id": 4,
+      "name": "Mocha",
+      "description": "Espresso with steamed milk, chocolate syrup, and whipped cream.",
+      "price": 4.95,
+      "category": "coffee",
+      "image": "mocha.jpg",
+      "popular": false,
+      "vegetarian": true,
+      "vegan": false,
+      "gluten_free": true
+    },
+    {
+      "id": 5,
+      "name": "Green Tea",
+      "description": "Premium Japanese green tea with a delicate, earthy flavor.",
+      "price": 3.50,
+      "category": "tea",
+      "image": "green-tea.jpg",
+      "popular": false,
+      "vegetarian": true,
+      "vegan": true,
+      "gluten_free": true
+    },
+    {
+      "id": 6,
+      "name": "Chai Latte",
+      "description": "Black tea infused with spices and steamed milk.",
+      "price": 4.50,
+      "category": "tea",
+      "image": "chai-latte.jpg",
+      "popular": true,
+      "vegetarian": true,
+      "vegan": false,
+      "gluten_free": true
+    },
+    {
+      "id": 7,
+      "name": "Croissant",
+      "description": "Buttery, flaky pastry made with pure butter.",
+      "price": 3.25,
+      "category": "pastries",
+      "image": "croissant.jpg",
+      "popular": true,
+      "vegetarian": true,
+      "vegan": false,
+      "gluten_free": false
+    },
+    {
+      "id": 8,
+      "name": "Blueberry Muffin",
+      "description": "Moist muffin packed with fresh blueberries.",
+      "price": 3.50,
+      "category": "pastries",
+      "image": "blueberry-muffin.jpg",
+      "popular": false,
+      "vegetarian": true,
+      "vegan": false,
+      "gluten_free": false
+    },
+    {
+      "id": 9,
+      "name": "Avocado Toast",
+      "description": "Whole grain toast with smashed avocado, salt, pepper, and red pepper flakes.",
+      "price": 7.95,
+      "category": "breakfast",
+      "image": "avocado-toast.jpg",
+      "popular": true,
+      "vegetarian": true,
+      "vegan": true,
+      "gluten_free": false
+    },
+    {
+      "id": 10,
+      "name": "Breakfast Sandwich",
+      "description": "Egg, cheddar, and bacon on a toasted English muffin.",
+      "price": 6.95,
+      "category": "breakfast",
+      "image": "breakfast-sandwich.jpg",
+      "popular": true,
+      "vegetarian": true,
+      "vegan": false,
+      "gluten_free": false
+    },
+    {
+      "id": 11,
+      "name": "Chicken Panini",
+      "description": "Grilled chicken with pesto, mozzarella, and roasted red peppers.",
+      "price": 9.95,
+      "category": "lunch",
+      "image": "chicken-panini.jpg",
+      "popular": false,
+      "vegetarian": false,
+      "vegan": false,
+      "gluten_free": false
+    },
+    {
+      "id": 12,
+      "name": "Vegetable Wrap",
+      "description": "Seasonal vegetables with hummus in a whole wheat wrap.",
+      "price": 8.95,
+      "category": "lunch",
+      "image": "vegetable-wrap.jpg",
+      "popular": false,
+      "vegetarian": true,
+      "vegan": true,
+      "gluten_free": false
+    }
+  ]

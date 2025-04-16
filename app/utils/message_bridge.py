@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Base URLs for APIs
-CHAINLIT_URL = os.environ.get('CHAINLIT_URL', 'http://localhost:8001')
+CHAINLIT_URL = os.environ.get('CHAINLIT_URL', 'http://localhost:8000')
 
 class MessageBridge:
     """Class to handle sending messages to Chainlit"""
