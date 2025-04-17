@@ -21,10 +21,11 @@ def register_callbacks(app, socketio):
     @app.callback(
     Output("cart-store", "data", allow_duplicate=True),
     [Input("socket-order-update", "children")],
-    [State("cart-store", "data")],
+    [State("cart-store", "data"),
+     State("user-store", "data")],  # Add user_store as state
     prevent_initial_call=True
 )
-    def update_cart_from_chainlit(socket_update, current_cart):
+    def update_cart_from_chainlit(socket_update, current_cart, user_data):
         """Update cart when order comes from Chainlit"""
         if not socket_update:
             return no_update
@@ -36,7 +37,16 @@ def register_callbacks(app, socketio):
             # Verify this is a valid order with items
             if not isinstance(order_data, dict) or 'items' not in order_data:
                 return no_update
-                
+            
+            # NEW: Check if this order belongs to the current user
+            current_username = user_data.get('username') if user_data else None
+            order_username = order_data.get('username') or order_data.get('user_id')
+            
+            # Only process orders for the current user or if no user is specified
+            if current_username and order_username and order_username != current_username and order_username != "guest":
+                print(f"Order belongs to {order_username}, not current user {current_username}")
+                return no_update
+                    
             # Check if this is a new order (not an update)
             if order_data.get('status', '').lower() in ['new', 'received']:
                 # Convert items to cart format
@@ -44,10 +54,8 @@ def register_callbacks(app, socketio):
                 
                 for item in order_data['items']:
                     if isinstance(item, dict):
-                        cart_item = {}
-                        
-                        # Handle different item formats
-                        if 'item_id' in item:
+                        # Handle different formats
+                        if "item_id" in item:
                             # Try to get item details from menu
                             try:
                                 from app.data.database import get_menu_item_by_id
@@ -79,6 +87,41 @@ def register_callbacks(app, socketio):
                         elif 'id' in item and 'name' in item:
                             # Already in correct format
                             cart_item = item
+                        elif 'name' in item:
+                            # Try to find item in menu by name
+                            try:
+                                from app.data.database import get_menu_items
+                                menu_items = get_menu_items()
+                                menu_item = next((mi for mi in menu_items if mi["name"].lower() == item["name"].lower()), None)
+                                
+                                if menu_item:
+                                    cart_item = {
+                                        "id": menu_item["id"],
+                                        "name": menu_item["name"],
+                                        "price": menu_item.get("price", 0),
+                                        "quantity": item.get("quantity", 1)
+                                    }
+                                else:
+                                    # If not found in menu, use as is with zero price
+                                    cart_item = {
+                                        "id": hash(item["name"]) % 10000,  # Generate a consistent ID from name
+                                        "name": item["name"],
+                                        "price": item.get("price", 0),
+                                        "quantity": item.get("quantity", 1)
+                                    }
+                            except Exception as e:
+                                print(f"Error finding menu item by name: {e}")
+                                # Use as is
+                                cart_item = {
+                                    "id": hash(item["name"]) % 10000,
+                                    "name": item["name"],
+                                    "price": item.get("price", 0),
+                                    "quantity": item.get("quantity", 1)
+                                }
+                        else:
+                            # Skip items without enough info
+                            print(f"Skipping item with insufficient information: {item}")
+                            continue
                         
                         if cart_item:
                             cart_items.append(cart_item)
@@ -86,36 +129,67 @@ def register_callbacks(app, socketio):
                 # If we have cart items, return them
                 if cart_items:
                     print(f"Updating cart with {len(cart_items)} items from Chainlit order")
+                    
+                    # Save order ID to user's data if available
+                    if user_data and 'id' in order_data:
+                        try:
+                            # Update user's active order
+                            from app.data.database import update_user
+                            if 'username' in user_data:
+                                update_data = {
+                                    'active_order': order_data.get('id')
+                                }
+                                update_user(user_data['username'], update_data)
+                                print(f"Updated user's active order: {order_data.get('id')}")
+                        except Exception as e:
+                            print(f"Error updating user's active order: {e}")
+                    
                     return cart_items
-        
+            
+            # If it's not a new order or we didn't return cart items above
+            return no_update
+            
         except Exception as e:
             print(f"Error updating cart from Chainlit: {e}")
-        
-        return no_update
+            return no_update
+
+    
     @app.callback(
-    [Output("order-details-modal", "is_open"),
-     Output("order-details-modal-body", "children")],
-    [Input("view-order-details-btn", "n_clicks")],
-    [State("user-store", "data")],
-    prevent_initial_call=True
-)
-    def open_order_details_from_chat(n_clicks, user_data):
-        """Open order details modal when View Details button is clicked in chat"""
+        [Output("order-details-modal", "is_open", allow_duplicate=True),
+        Output("order-details-modal-body", "children", allow_duplicate=True)],
+        [Input("view-order-details-btn", "n_clicks")],
+        [State("current-order-status", "children")],
+        prevent_initial_call=True
+    )
+    def open_order_details_modal_from_chat(n_clicks, order_status_children):
+        """Open order details modal when View Details button in chat is clicked"""
         if not n_clicks:
             return False, None
         
-        # Get active order from user data
+        # Get active order from user store
         active_order = None
-        if user_data and 'active_order' in user_data:
-            active_order = user_data.get('active_order')
         
-        # If no active order in user data, try to get from database
+        try:
+            # Check if we can extract the order ID from the current order status
+            import re
+            if order_status_children:
+                order_text = str(order_status_children)
+                match = re.search(r'Order #([\w\-]+)', order_text)
+                if match:
+                    order_id = match.group(1)
+                    from app.data.database import get_order_by_id
+                    active_order = get_order_by_id(order_id)
+                    print(f"Found order ID {order_id} in current order status")
+        except Exception as e:
+            print(f"Error getting order: {e}")
+        
         if not active_order:
             try:
                 from app.data.database import get_orders
                 orders = get_orders()
                 if orders:
                     active_order = orders[0]  # Get most recent order
+                    print(f"Using most recent order: {active_order['id']}")
             except Exception as e:
                 print(f"Error getting orders: {e}")
         
@@ -144,7 +218,7 @@ def register_callbacks(app, socketio):
                 ]),
                 html.P([
                     html.Strong("Delivery: "),
-                    html.Span(active_order.get('delivery_location', 'Not specified'))
+                    html.Span(active_order.get('delivery_location', active_order.get('delivery_details', 'Not specified')))
                 ]),
                 html.P([
                     html.Strong("Special Instructions: "),
@@ -152,82 +226,12 @@ def register_callbacks(app, socketio):
                 ]),
                 html.P([
                     html.Strong("Date: "),
-                    html.Span(active_order.get('date', 'Unknown'))
+                    html.Span(active_order.get('date', active_order.get('timestamp', 'Unknown')))
                 ])
             ], className="mt-3")
         ])
         
         return True, modal_content
-
-    def create_order_items_display(items):
-        """Create a display table for order items"""
-        if not items:
-            return html.P("No items in this order.")
-        
-        # Try to get menu items for item names
-        try:
-            from app.data.database import get_menu_items
-            menu_items = get_menu_items()
-        except:
-            menu_items = []
-        
-        # Create table rows
-        rows = []
-        for item in items:
-            # Get item name based on item_id
-            item_name = "Unknown Item"
-            item_price = 0
-            
-            # If item has a direct name, use it
-            if isinstance(item, dict):
-                if "name" in item:
-                    item_name = item["name"]
-                    item_price = item.get("price", 0)
-                elif "item_id" in item and menu_items:
-                    # Look up item in menu
-                    menu_item = next((mi for mi in menu_items if mi["id"] == item["item_id"]), None)
-                    if menu_item:
-                        item_name = menu_item["name"]
-                        item_price = menu_item.get("price", 0)
-                    else:
-                        item_name = f"Item #{item['item_id']}"
-                
-                # Get quantity
-                quantity = item.get("quantity", 1)
-                
-                # Calculate subtotal
-                subtotal = quantity * item_price
-                
-                # Create row
-                row = html.Tr([
-                    html.Td(item_name),
-                    html.Td(f"${item_price:.2f}"),
-                    html.Td(quantity),
-                    html.Td(f"${subtotal:.2f}")
-                ])
-                
-                rows.append(row)
-        
-        # Create the table
-        table = dbc.Table(
-            [
-                html.Thead(
-                    html.Tr([
-                        html.Th("Item"),
-                        html.Th("Price"),
-                        html.Th("Quantity"),
-                        html.Th("Subtotal")
-                    ])
-                ),
-                html.Tbody(rows)
-            ],
-            bordered=True,
-            hover=True,
-            striped=True,
-            size="sm"
-        )
-        
-        return table
     
     @app.callback(
         Output("cart-alert", "children"),
@@ -891,3 +895,100 @@ def register_callbacks(app, socketio):
         
         # For demo, just return the new status
         return {"id": order_id, "status": new_status}
+    
+
+
+def create_order_items_display(items):
+    """Create a display table for order items"""
+    if not items:
+        return html.P("No items in this order.")
+    
+    # Try to get menu items for item names
+    try:
+        from app.data.database import get_menu_items
+        menu_items = get_menu_items()
+    except Exception as e:
+        print(f"Error getting menu items: {e}")
+        menu_items = []
+    
+    # Create table rows
+    rows = []
+    total = 0
+    
+    for item in items:
+        # Get item name based on item_id
+        item_name = "Unknown Item"
+        item_price = 0
+        
+        # If item has a direct name, use it
+        if isinstance(item, dict):
+            if "name" in item:
+                item_name = item["name"]
+                item_price = item.get("price", 0)
+            elif "item_id" in item and menu_items:
+                # Look up item in menu
+                menu_item = next((mi for mi in menu_items if mi["id"] == item["item_id"]), None)
+                if menu_item:
+                    item_name = menu_item["name"]
+                    item_price = menu_item.get("price", 0)
+                else:
+                    item_name = f"Item #{item['item_id']}"
+            
+            # Get quantity
+            quantity = item.get("quantity", 1)
+            
+            # Calculate subtotal
+            subtotal = quantity * item_price
+            total += subtotal
+            
+            # Create row
+            row = html.Tr([
+                html.Td(item_name),
+                html.Td(f"${item_price:.2f}"),
+                html.Td(quantity),
+                html.Td(f"${subtotal:.2f}")
+            ])
+            
+            rows.append(row)
+    
+    # Create the table
+    table = dbc.Table(
+        [
+            html.Thead(
+                html.Tr([
+                    html.Th("Item"),
+                    html.Th("Price"),
+                    html.Th("Quantity"),
+                    html.Th("Subtotal")
+                ])
+            ),
+            html.Tbody(rows + [
+                # Add total row
+                html.Tr([
+                    html.Td(html.Strong("Total"), colSpan=3, className="text-end"),
+                    html.Td(html.Strong(f"${total:.2f}"))
+                ], className="table-active")
+            ])
+        ],
+        bordered=True,
+        hover=True,
+        striped=True,
+        size="sm"
+    )
+    
+    return table
+
+def get_status_color(status):
+    """Get appropriate Bootstrap color class for order status"""
+    status_lower = status.lower() if status else ""
+    if status_lower == 'completed' or status_lower == 'delivered':
+        return 'success'
+    elif status_lower == 'in progress' or status_lower == 'preparing':
+        return 'primary'
+    elif status_lower == 'ready':
+        return 'info'
+    elif status_lower == 'cancelled':
+        return 'danger'
+    else:
+        return 'secondary'
+

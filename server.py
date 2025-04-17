@@ -114,6 +114,33 @@ def configure_server(server, socketio):
             print(f"Error in place-order API: {str(e)}")
             return jsonify({'status': 'error', 'message': str(e)})
     
+    @server.route('/api/verify-token', methods=['GET'])
+    def verify_token():
+        """API endpoint to verify authentication tokens"""
+        auth_header = request.headers.get('Authorization', '')
+        
+        if auth_header.startswith('Bearer '):
+            token = auth_header[7:]  # Remove 'Bearer ' prefix
+            
+            try:
+                # In a real app, you'd verify the token properly
+                # Here's a simple implementation for demo purposes
+                if '-' in token:
+                    user_id = token.split('-')[0]
+                    return jsonify({
+                        'status': 'success',
+                        'user_id': user_id, 
+                        'is_authenticated': True
+                    })
+            except Exception as e:
+                print(f"Error verifying token: {e}")
+        
+        return jsonify({
+            'status': 'error',
+            'message': 'Invalid token'
+        }), 401
+
+
     # SocketIO event handlers
     @socketio.on('connect')
     def handle_connect():

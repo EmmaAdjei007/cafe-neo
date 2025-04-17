@@ -123,13 +123,13 @@ def register_callbacks(app, socketio):
     
     # Set Chainlit iframe source when panel becomes visible
     @app.callback(
-        Output('floating-chainlit-frame', 'src'),
-        [
-            Input('floating-chat-panel', 'style'),
-            Input('url', 'pathname')
-        ],
-        [State('user-store', 'data')]
-    )
+    Output('floating-chainlit-frame', 'src'),
+    [
+        Input('floating-chat-panel', 'style'),
+        Input('url', 'pathname')
+    ],
+    [State('user-store', 'data')]
+)
     def update_floating_chat_frame(panel_style, pathname, user_data):
         """Update the Chainlit iframe source with correct parameters"""
         # Only update if panel is being shown
@@ -162,6 +162,9 @@ def register_callbacks(app, socketio):
         # Add user info if available
         if user_data and 'username' in user_data:
             query_params['user'] = user_data['username']
+            
+            # Add authentication token - THIS IS THE KEY ADDITION
+            query_params['token'] = f"{user_data['username']}-{user_data.get('id', 'default')}"
             
             # If user has active order, add order ID
             if 'active_order' in user_data and user_data['active_order']:
@@ -469,9 +472,10 @@ def register_callbacks(app, socketio):
                 print(f"Error parsing socket data: {e}")
         
         return dash.no_update
+    
+    
 
-    # Import time for use in callback
-    import time
+    
 
 
 # Helper function for order status colors

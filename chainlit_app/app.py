@@ -442,11 +442,25 @@ class OrderManager:
                 
             order_data["items"] = valid_items
 
-            # Step 5: Add context data
+            # Step 5: Add context data with enhanced user handling
             context = cl.user_session.get("context", {})
+            
+            # Enhanced user ID assignment
             if "user_id" not in order_data:
-                order_data["user_id"] = context.get("user_id", "guest")
-                
+                user_id = context.get("user_id", "guest")
+                # Don't use "guest" if we have a real user ID and user is authenticated
+                if user_id != "guest" and context.get("is_authenticated", False):
+                    order_data["user_id"] = user_id
+                    print(f"Setting authenticated user_id from context: {user_id}")
+                else:
+                    order_data["user_id"] = "guest"
+                    print("Using guest user ID for unauthenticated order")
+            
+            # Make sure username field is also set for compatibility with Dash
+            if "username" not in order_data and "user_id" in order_data:
+                order_data["username"] = order_data["user_id"]
+                print(f"Setting username to match user_id: {order_data['username']}")
+            
             # Add timestamp
             order_data["timestamp"] = datetime.now().isoformat()
             
@@ -517,7 +531,7 @@ class OrderManager:
         except Exception as e:
             print(f"Error placing order: {e}")
             return {"error": str(e), "suggestion": "Try using a different format or checking menu items"}
-
+    
     @staticmethod
     def get_order_status(order_id):
         """

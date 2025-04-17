@@ -14,10 +14,10 @@ def register_callbacks(app):
     """
 
     @app.callback(
-    Output("user-store", "data", allow_duplicate=True),
-    [Input("socket-order-update", "children")],
-    [State("user-store", "data")],
-    prevent_initial_call=True
+Output("user-store", "data", allow_duplicate=True),
+[Input("socket-order-update", "children")],
+[State("user-store", "data")],
+prevent_initial_call=True
 )
     def update_user_active_order(socket_update, current_user):
         """Update user's active order when a new order is received"""
@@ -33,8 +33,16 @@ def register_callbacks(app):
                 return dash.no_update
             
             # Check if this order belongs to the current user
-            # If user_id is in the order data, check if it matches
-            if 'user_id' in order_data and order_data['user_id'] != current_user.get('username'):
+            # Enhanced: Check both user_id and username fields
+            user_identifier = order_data.get('user_id') or order_data.get('username')
+            current_username = current_user.get('username')
+            
+            # Process orders that either:
+            # 1. Match the current user
+            # 2. Have no user specified (guest orders)
+            # 3. Have a user_id of 'guest' (also guest orders)
+            if user_identifier and user_identifier != "guest" and user_identifier != current_username:
+                print(f"Order {order_data['id']} belongs to {user_identifier}, not current user {current_username}")
                 return dash.no_update
             
             # Update the user's active order
