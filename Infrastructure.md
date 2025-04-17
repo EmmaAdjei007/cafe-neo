@@ -21,6 +21,8 @@ flowchart TD
     Data["Menu & Order Data"]
     LangChain["LangChain Framework"]
     OpenAI["OpenAI API (GPT)"]
+    RobotAPI["Robot API"]
+    Robots["Delivery Robots"]
 
     Client <--> WebServer
     
@@ -29,6 +31,8 @@ flowchart TD
     end
     
     WebServer <--> CommBridge
+    FlaskBE <--> RobotAPI
+    RobotAPI <--> Robots
     
     subgraph CommBridge
         SocketIO
@@ -87,6 +91,11 @@ Implements multiple redundant channels for reliable communication:
 - Inventory management
 - Delivery tracking
 
+### 6. Robot Delivery System
+- Simple API interface to robot fleet
+- Dispatch and tracking capabilities
+- Real-time delivery status updates
+
 ## Data Flow
 
 1. **User Interface Interactions**:
@@ -111,6 +120,21 @@ Implements multiple redundant channels for reliable communication:
    - Specialized tools for different functions (menu search, order placement, etc.)
    - Responses formatted for appropriate context
 
+5. **Robot Delivery Flow**:
+   ```mermaid
+   sequenceDiagram
+       participant Dashboard
+       participant RobotAPI
+       participant Robot
+       
+       Dashboard->>RobotAPI: Dispatch order
+       RobotAPI->>Robot: Send delivery instructions
+       Robot->>RobotAPI: Send location updates
+       RobotAPI->>Dashboard: Update delivery status
+       Robot->>RobotAPI: Order delivered
+       RobotAPI->>Dashboard: Mark order complete
+   ```
+
 ## Technology Stack
 
 - **Frontend**: 
@@ -130,6 +154,11 @@ Implements multiple redundant channels for reliable communication:
   - OpenAI API (GPT models)
   - FAISS vector store
 
+- **Robot Delivery**:
+  - REST API endpoints (GET/POST/PUT)
+  - WebSocket for real-time location tracking
+  - Plotly for map visualization
+
 - **Database**:
   - SQLite
 
@@ -148,17 +177,20 @@ flowchart LR
         Run["run.py"]
         Run --> DashApp1["Dash (Port 8050)"]
         Run --> ChainlitApp1["Chainlit (Port 8000)"]
+        Run --> RobotSim1["Robot Simulator (Port 8051)"]
     end
     
     subgraph "Option 2: Eventlet Runner"
         RunEventlet["run_with_eventlet.py"]
         RunEventlet --> DashApp2["Dash with Eventlet (Port 8050)"]
         RunEventlet --> ChainlitApp2["Chainlit (Port 8000)"]
+        RunEventlet --> RobotSim2["Robot Simulator (Port 8051)"]
     end
     
     subgraph "Option 3: Separate Components"
         DashApp3["app.py (Port 8050)"]
         ChainlitApp3["chainlit run app.py (Port 8000)"]
+        RobotSim3["robot_simulator.py (Port 8051)"]
     end
     
     User --> Run
@@ -183,6 +215,7 @@ sequenceDiagram
     participant Chainlit
     participant GPT as OpenAI GPT
     participant DB as Database
+    participant Robot as Robot API
     
     User->>DashUI: Send message
     DashUI->>Bridge: Forward message
@@ -206,6 +239,12 @@ sequenceDiagram
         Chainlit->>DB: Store order
         Chainlit->>Bridge: Notify order created
         Bridge->>DashUI: Update order status
+        
+        alt Robot Delivery
+            Server->>Robot: Dispatch robot
+            Robot->>Server: Send location updates
+            Server->>DashUI: Update tracking map
+        end
     end
     
     Chainlit->>Bridge: Send response
@@ -227,3 +266,5 @@ sequenceDiagram
 - Token verification between components
 - Cross-origin resource sharing configuration
 - Error handling that doesn't expose sensitive information
+- Secure robot command validation
+- Emergency stop capability
