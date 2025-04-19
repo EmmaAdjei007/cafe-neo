@@ -53,31 +53,36 @@ def register_callbacks(app, socketio):
     # Updated callback function for toggle_chat_panel in app/callbacks/chat_callbacks.py
 
     @app.callback(
-        [
-            Output('floating-chat-panel', 'style'),
-            Output('floating-chat-panel', 'className'),
-            Output('chat-faq-section', 'style')
-        ],
-        [
-            Input('floating-chat-button', 'n_clicks'),
-            Input('close-chat-button', 'n_clicks'),
-            Input('minimize-chat-button', 'n_clicks'),
-            Input('expand-chat-button', 'n_clicks'),  # Added input for expand button
-            Input('floating-chat-socket-update', 'data-open-chat')
-        ],
-        [
-            State('floating-chat-panel', 'style'),
-            State('floating-chat-panel', 'className'),
-            State('chat-faq-section', 'style')
-        ]
-    )
+    [
+        Output('floating-chat-panel', 'style'),
+        Output('floating-chat-panel', 'className'),
+        Output('chat-faq-section', 'style')
+    ],
+    [
+        Input('floating-chat-button', 'n_clicks'),
+        Input('close-chat-button', 'n_clicks'),
+        Input('minimize-chat-button', 'n_clicks'),
+        Input('expand-chat-button', 'n_clicks'),
+        Input('floating-chat-socket-update', 'data-open-chat')
+    ],
+    [
+        State('floating-chat-panel', 'style'),
+        State('floating-chat-panel', 'className'),
+        State('chat-faq-section', 'style')
+    ]
+)
     def toggle_chat_panel(open_clicks, close_clicks, minimize_clicks, expand_clicks, open_chat_data,
                         current_style, current_class, faq_style):
         """Toggle the floating chat panel visibility and state"""
         ctx = callback_context
         
         if not ctx.triggered:
-            return current_style or {"display": "none"}, current_class, faq_style or {"display": "none"}
+            # Check local storage state from JS
+            current_display = current_style.get("display", "none") if current_style else "none"
+            if current_display == "none":
+                # Set state based on localStorage
+                return current_style or {"display": "none"}, current_class or "floating-chat-panel", faq_style or {"display": "none"}
+            return current_style, current_class, faq_style
         
         button_id = ctx.triggered[0]['prop_id'].split('.')[0]
         
@@ -136,37 +141,35 @@ def register_callbacks(app, socketio):
                 
         # Default: no change
         return current_style or hidden_style, current_class or base_class, faq_style or hide_faq
-    
+        
     # Set Chainlit iframe source when panel becomes visible
     # Fix for authentication passing in app/callbacks/chat_callbacks.py
         # Find this function and replace it with the below:
     @app.callback(
-        Output('floating-chainlit-frame', 'src'),
-        [
-            Input('floating-chat-panel', 'style'),
-            Input('url', 'pathname')
-        ],
-        [State('user-store', 'data'), 
-        State('floating-chainlit-frame', 'src')]  # Added src state to preserve URL during navigation
-    )
+    Output('floating-chainlit-frame', 'src'),
+    [
+        Input('floating-chat-panel', 'style'),
+        Input('url', 'pathname')
+    ],
+    [State('user-store', 'data'), 
+     State('floating-chainlit-frame', 'src')]
+)
     def update_floating_chat_frame(panel_style, pathname, user_data, current_src):
         """Update the Chainlit iframe source with correct parameters"""
         ctx = callback_context
         trigger = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
         
         # Only update if panel is being shown for the first time or we've changed pages
-        # If it's just a page change and the panel isn't visible, don't update
         if not panel_style or panel_style.get("display") == "none":
             if trigger == 'url':
                 return dash.no_update  # Don't update on page change if panel is hidden
-            
+                
         # If we already have a URL and this is a page navigation, keep most parameters
-        if current_src and trigger == 'url':
-            # Parse the current URL to keep the session ID and authentication
+        if current_src and trigger == 'url' and '/?' in current_src:  # More specific check for parameters
             parts = urllib.parse.urlparse(current_src)
             query_params = dict(urllib.parse.parse_qsl(parts.query))
             
-            # We only update the tab parameter based on the new pathname
+            # Only update the tab parameter based on the new pathname
             if pathname == '/menu':
                 query_params['tab'] = 'menu'
             elif pathname == '/orders':
@@ -179,8 +182,8 @@ def register_callbacks(app, socketio):
                 query_params['tab'] = 'profile'
             else:
                 query_params['tab'] = 'home'
-                
-            # Rebuild the URL with the updated tab
+            
+            # Rebuild the URL with the updated tab, preserving other parameters
             url = f"{CHAINLIT_URL}?{urllib.parse.urlencode(query_params)}"
             return url
         
@@ -213,7 +216,9 @@ def register_callbacks(app, socketio):
                 "username": user_data['username'],
                 "id": user_data.get('id', ''),
                 "role": user_data.get('role', 'customer'),
-                "email": user_data.get('email', '')
+                "email": user_data.get('email', ''),
+                "first_name": user_data.get('first_name', ''),
+                "last_name": user_data.get('last_name', '')
             }
             
             # JSON encode and base64 the token for security
@@ -376,7 +381,7 @@ def register_callbacks(app, socketio):
     [
         Input('refresh-order-btn', 'n_clicks'),
         Input('status-update-interval', 'n_intervals'),
-        Input('socket-order-update', 'children')  # Added input to listen for order updates from Socket.IO
+        Input('socket-order-update', 'children')
     ],
     [State('user-store', 'data')]
 )
@@ -399,11 +404,12 @@ def register_callbacks(app, socketio):
                 
                 # Check if it's a valid order update
                 if isinstance(order_data, dict) and 'id' in order_data:
-                    active_order = order_data
+                    # Check if this order belongs to the current user
+                    user_identifier = order_data.get('user_id') or order_data.get('username')
+                    current_username = user_data.get('username') if user_data else None
                     
-                    # If user is logged in, update their active order in user_store
-                    if user_data:
-                        # This would need to be handled by a separate callback that updates user-store
+                    if not user_identifier or user_identifier == "guest" or user_identifier == current_username:
+                        active_order = order_data
                         print(f"Socket update received for order: {order_data['id']}")
             except Exception as e:
                 print(f"Error parsing order socket data: {e}")
@@ -415,13 +421,12 @@ def register_callbacks(app, socketio):
         # If still no active order, check the most recent order in the database
         if not active_order:
             try:
-                # This would be a function to get the most recent order from your data storage
-                # For demo purposes, we're just returning None
-                from app.data.database import get_orders
-                orders = get_orders()
-                if orders:
-                    # Get the most recent order (assuming they're ordered by date)
-                    active_order = orders[0]
+                from app.data.database import get_orders_by_username
+                if user_data and 'username' in user_data:
+                    orders = get_orders_by_username(user_data['username'])
+                    if orders:
+                        # Get the most recent order
+                        active_order = orders[0]
             except Exception as e:
                 print(f"Error getting recent orders: {e}")
         
@@ -429,13 +434,13 @@ def register_callbacks(app, socketio):
         if not active_order:
             return no_order_content
         
-        # Now we know active_order exists, let's create the order status content
         # Create order status content
         order_content = [
             html.H6(f"Order #{active_order['id']}", className="card-subtitle mb-2"),
             html.P([
                 html.Strong("Status: "),
-                html.Span(active_order.get('status', 'New'), className=f"text-{get_status_color(active_order.get('status', 'New'))}")
+                html.Span(active_order.get('status', 'New'), 
+                        className=f"text-{get_status_color(active_order.get('status', 'New'))}")
             ]),
             
             # Show items if available

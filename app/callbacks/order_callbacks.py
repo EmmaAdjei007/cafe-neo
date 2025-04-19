@@ -36,10 +36,7 @@ def register_callbacks(app, socketio):
 
     """
 
-    # Complete rewrite of order synchronization
-    # Place this in app/callbacks/order_callbacks.py to replace the update_cart_from_chainlit function
-
-    
+       
 
     @app.callback(
     [Output("cart-store", "data", allow_duplicate=True),
@@ -64,24 +61,27 @@ def register_callbacks(app, socketio):
             
             print(f"Received order from Chainlit: {order_data.get('id', 'unknown')} with {len(order_data['items'])} items")
             
-            # Check user info but with more flexibility
+            # Check user info with more flexible matching
             current_username = user_data.get('username') if user_data else None
             order_username = order_data.get('username') or order_data.get('user_id')
             
-            # Process the order if:
-            # 1. It's marked for the current user, OR
-            # 2. The order is for "guest" and the user is logged in, OR
-            # 3. No user is specified in the order
-            
-            # Only reject if order explicitly belongs to a different user
-            if (current_username and order_username and 
-                order_username not in [current_username, "guest"] and 
-                current_username != "guest"):
-                print(f"Order belongs to {order_username}, not current user {current_username}")
-                return dash.no_update, dash.no_update
-                        
-            # Check if this is a new order (not an update)
-            if order_data.get('status', '').lower() in ['new', 'received']:
+            # Process the order if it belongs to the current user or is for guest
+            if not current_username or not order_username or \
+            current_username == order_username or \
+            order_username == "guest":
+                
+                # Update user's active order
+                if user_data and 'id' in order_data:
+                    try:
+                        # Update user store with active order
+                        updated_user = dict(user_data)
+                        updated_user['active_order'] = order_data
+                        # You'll need to trigger a callback to update user-store here
+                        # For simplicity, just log it
+                        print(f"Should update user's active order to: {order_data['id']}")
+                    except Exception as e:
+                        print(f"Error updating user's active order: {e}")
+                
                 # Convert items to cart format
                 cart_items = []
                 
@@ -89,7 +89,6 @@ def register_callbacks(app, socketio):
                     if isinstance(item, dict):
                         # Handle different formats
                         if "item_id" in item:
-                            # Try to get item details from menu
                             try:
                                 from app.data.database import get_menu_item_by_id
                                 menu_item = get_menu_item_by_id(item['item_id'])
@@ -101,25 +100,14 @@ def register_callbacks(app, socketio):
                                         "price": menu_item.get("price", 0),
                                         "quantity": item.get("quantity", 1)
                                     }
+                                    cart_items.append(cart_item)
                                 else:
-                                    # Fallback if menu item not found
-                                    cart_item = {
-                                        "id": item["item_id"],
-                                        "name": f"Item #{item['item_id']}",
-                                        "price": 0,
-                                        "quantity": item.get("quantity", 1)
-                                    }
+                                    print(f"Menu item not found for ID: {item['item_id']}")
                             except Exception as e:
                                 print(f"Error getting menu item: {e}")
-                                cart_item = {
-                                    "id": item["item_id"],
-                                    "name": f"Item #{item['item_id']}",
-                                    "price": 0,
-                                    "quantity": item.get("quantity", 1)
-                                }
                         elif 'id' in item and 'name' in item:
                             # Already in correct format
-                            cart_item = item
+                            cart_items.append(item)
                         elif 'name' in item:
                             # Try to find item in menu by name
                             try:
@@ -134,48 +122,9 @@ def register_callbacks(app, socketio):
                                         "price": menu_item.get("price", 0),
                                         "quantity": item.get("quantity", 1)
                                     }
-                                else:
-                                    # If not found in menu, use as is with zero price
-                                    cart_item = {
-                                        "id": hash(item["name"]) % 10000,  # Generate a consistent ID from name
-                                        "name": item["name"],
-                                        "price": item.get("price", 0),
-                                        "quantity": item.get("quantity", 1)
-                                    }
+                                    cart_items.append(cart_item)
                             except Exception as e:
                                 print(f"Error finding menu item by name: {e}")
-                                # Use as is
-                                cart_item = {
-                                    "id": hash(item["name"]) % 10000,
-                                    "name": item["name"],
-                                    "price": item.get("price", 0),
-                                    "quantity": item.get("quantity", 1)
-                                }
-                        else:
-                            # Skip items without enough info
-                            print(f"Skipping item with insufficient information: {item}")
-                            continue
-                        
-                        if cart_item:
-                            cart_items.append(cart_item)
-                    elif isinstance(item, str):
-                        # Handle simple string items
-                        # Try to find in menu
-                        try:
-                            from app.data.database import get_menu_items
-                            menu_items = get_menu_items()
-                            menu_item = next((mi for mi in menu_items if mi["name"].lower() == item.lower()), None)
-                            
-                            if menu_item:
-                                cart_item = {
-                                    "id": menu_item["id"],
-                                    "name": menu_item["name"],
-                                    "price": menu_item.get("price", 0),
-                                    "quantity": 1
-                                }
-                                cart_items.append(cart_item)
-                        except Exception as e:
-                            print(f"Error finding string item in menu: {e}")
                 
                 # If we have cart items, return them
                 if cart_items:
@@ -196,25 +145,10 @@ def register_callbacks(app, socketio):
                         style={"zIndex": 1050, "minWidth": "300px"}
                     )
                     
-                    # Save order ID to user's data if available
-                    if user_data and 'id' in order_data:
-                        try:
-                            # Update user's active order
-                            from app.data.database import update_user
-                            if 'username' in user_data:
-                                update_data = {
-                                    'active_order': order_data
-                                }
-                                update_user(user_data['username'], update_data)
-                                print(f"Updated user's active order: {order_data.get('id')}")
-                        except Exception as e:
-                            print(f"Error updating user's active order: {e}")
-                    
                     return cart_items, alert
             
-            # If it's not a new order or we didn't return cart items above
             return dash.no_update, dash.no_update
-                
+            
         except Exception as e:
             print(f"Error updating cart from Chainlit: {e}")
             return dash.no_update, dash.no_update
@@ -222,12 +156,12 @@ def register_callbacks(app, socketio):
     # Add or replace this callback in app/callbacks/order_callbacks.py
 
     @app.callback(
-        [Output("order-details-modal", "is_open", allow_duplicate=True),
-        Output("order-details-modal-body", "children", allow_duplicate=True)],
-        [Input("view-order-details-btn", "n_clicks")],
-        [State("user-store", "data")],
-        prevent_initial_call=True
-    )
+    [Output("order-details-modal", "is_open", allow_duplicate=True),
+     Output("order-details-modal-body", "children", allow_duplicate=True)],
+    [Input("view-order-details-btn", "n_clicks")],
+    [State("user-store", "data")],
+    prevent_initial_call=True
+)
     def open_order_details_modal_from_chat(n_clicks, user_data):
         """Open order details modal when View Details button in chat is clicked"""
         if not n_clicks:
@@ -242,26 +176,14 @@ def register_callbacks(app, socketio):
         else:
             try:
                 # If no active order in user store, try to get the most recent order
-                from app.data.database import get_orders
-                orders = get_orders()
-                if orders and len(orders) > 0:
-                    active_order = orders[0]  # Most recent order
-                    print(f"Using most recent order: {active_order['id']}")
+                from app.data.database import get_orders_by_username
+                if user_data and 'username' in user_data:
+                    orders = get_orders_by_username(user_data['username'])
+                    if orders:
+                        active_order = orders[0]  # Most recent order
+                        print(f"Using most recent order: {active_order['id']}")
             except Exception as e:
                 print(f"Error getting orders: {e}")
-        
-        # If still no active order, check order_data files
-        if not active_order:
-            try:
-                import os
-                import json
-                order_files = sorted([f for f in os.listdir('order_data') if f.startswith('order_')], reverse=True)
-                if order_files:
-                    with open(os.path.join('order_data', order_files[0]), 'r') as f:
-                        active_order = json.load(f)
-                        print(f"Loaded order from file: {active_order['id']}")
-            except Exception as e:
-                print(f"Error loading order from file: {e}")
         
         # If still no active order, return empty modal
         if not active_order:

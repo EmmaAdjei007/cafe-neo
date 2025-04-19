@@ -463,14 +463,11 @@ class OrderManager:
 
             # Step 5: Add context data with enhanced user handling
             context = cl.user_session.get("context", {})
-            
-            # Enhanced user ID assignment
             if "user_id" not in order_data:
-                user_id = context.get("user_id", "guest")
-                # Don't use "guest" if we have a real user ID and user is authenticated
-                if user_id != "guest" and context.get("is_authenticated", False):
+                user_id = context.get("user_id")
+                if user_id and user_id != "guest" and context.get("is_authenticated", False):
                     order_data["user_id"] = user_id
-                    order_data["username"] = user_id
+                    order_data["username"] = context.get("username", user_id)
                     print(f"Setting authenticated user_id from context: {user_id}")
                 else:
                     order_data["user_id"] = "guest"
@@ -517,18 +514,7 @@ class OrderManager:
             # Step 7: Notify dashboard (original functionality)
             success = False
             try:
-                # Method 1: Send to parent window using postMessage
-                try:
-                    cl.send_to_parent({
-                        "type": "order_update", 
-                        "order": order_data
-                    })
-                    print("Order notification sent to parent via postMessage")
-                    success = True
-                except Exception as e:
-                    print(f"Error sending order via cl.send_to_parent: {e}")
-                
-                # Method 2: Try Socket.IO if available
+                # First try Socket.IO if available
                 try:
                     import socketio
                     sio = socketio.Client()
@@ -539,54 +525,61 @@ class OrderManager:
                     success = True
                 except Exception as e:
                     print(f"Error sending order via Socket.IO: {e}")
-                    
-                # Method 3: Try REST API
-                try:
-                    response = requests.post(
-                        f"{DASHBOARD_URL}/api/place-order", 
-                        json=order_data, 
-                        timeout=5
-                    )
-                    print(f"Place order API response: {response.status_code}")
-                    if response.status_code == 200:
+                
+                # Then try REST API
+                if not success:
+                    try:
+                        response = requests.post(
+                            f"{DASHBOARD_URL}/api/place-order", 
+                            json=order_data, 
+                            timeout=5
+                        )
+                        print(f"Place order API response: {response.status_code}")
+                        if response.status_code == 200:
+                            success = True
+                    except Exception as e:
+                        print(f"Error calling place-order API: {e}")
+                
+                # Finally, use postMessage as last resort
+                if not success:
+                    try:
+                        cl.send_to_parent({
+                            "type": "order_update", 
+                            "order": order_data
+                        })
+                        print("Order notification sent to parent via postMessage")
                         success = True
-                except Exception as e:
-                    print(f"Error calling place-order API: {e}")
-                    
-                # Method 4: Write to file as last resort
-                try:
-                    os.makedirs('order_data', exist_ok=True)
-                    with open(f"order_data/order_{order_data['id']}.json", 'w') as f:
-                        json.dump(order_data, f)
-                    print(f"Order saved to file as fallback")
-                    success = True
-                except Exception as e:
-                    print(f"Error saving order to file: {e}")
-                    
-                # Store in session context for use in later messages
-                context = cl.user_session.get("context", {})
-                context["active_order"] = order_data
-                context["delivery_location"] = order_data.get("delivery_location", "Table 1") 
-                cl.user_session.set("context", context)
-                print("Order saved to session context")
+                    except Exception as e:
+                        print(f"Error sending order via cl.send_to_parent: {e}")
                 
             except Exception as e:
                 print(f"Error in dashboard notification: {e}")
-                
-            # Update the return statement to include success info
-            if success:
-                return order_data
-            else:
-                return {"error": "Failed to notify dashboard about order", "order_data": order_data}
-
+            
+            # Always save to file as backup
+            try:
+                os.makedirs('order_data', exist_ok=True)
+                with open(f"order_data/order_{order_data['id']}.json", 'w') as f:
+                    json.dump(order_data, f)
+                print(f"Order saved to file: order_{order_data['id']}.json")
+            except Exception as e:
+                print(f"Error saving order to file: {e}")
+            
+            # Store in session context
+            context = cl.user_session.get("context", {})
+            context["active_order"] = order_data
+            context["delivery_location"] = order_data.get("delivery_location", "Table 1") 
+            cl.user_session.set("context", context)
+            print("Order saved to session context")
+            
+            return order_data if success else {"error": "Failed to notify dashboard about order", "order_data": order_data}
+            
         except Exception as e:
-            # Catch any unexpected errors in the overall flow
             print(f"Unexpected error placing order: {e}")
             import traceback
             traceback.print_exc()
             raise
 
-   
+
     @staticmethod
     def get_order_status(order_id):
         """
@@ -1173,9 +1166,9 @@ def query_knowledge_base(query):
 
 def verify_auth_token(token):
     """
-    Verify authentication token with enhanced debugging.
+    Verify authentication token with enhanced debugging
     Args:
-        token (str): Authentication token.
+        token (str): Authentication token
     Returns:
         tuple: (user_id, is_authenticated, user_data)
     """
@@ -1183,7 +1176,7 @@ def verify_auth_token(token):
         logger.debug("No authentication token provided")
         return "guest", False, {}
         
-    logger.debug(f"Verifying auth token: {token[:10]}...")
+    logger.debug(f"Verifying auth token: {token[:20]}...")
     
     try:
         # First try to decode if it's base64 encoded JSON
@@ -1197,6 +1190,11 @@ def verify_auth_token(token):
             
             if isinstance(user_data, dict) and 'username' in user_data:
                 logger.debug(f"Successfully decoded auth token for user: {user_data['username']}")
+                # Also pass the full name if available
+                if 'first_name' in user_data or 'last_name' in user_data:
+                    full_name = f"{user_data.get('first_name', '')} {user_data.get('last_name', '')}".strip()
+                    if full_name:
+                        user_data['full_name'] = full_name
                 return user_data['username'], True, user_data
         except Exception as decode_err:
             logger.debug(f"Not a base64 token: {decode_err}")
@@ -1450,14 +1448,6 @@ def get_personalized_welcome(context):
 
 # ----- Chainlit Handlers -----
 
-# Completely rewritten on_chat_start function
-# Replace the existing function in chainlit_app/app.py
-
-# Update the on_chat_start function in chainlit_app/app.py
-
-# Completely rewritten on_chat_start function
-# Replace the existing function in chainlit_app/app.py
-
 @cl.on_chat_start
 async def start():
     """Initialize chat session with detailed logging"""
@@ -1482,70 +1472,28 @@ async def start():
     logger.debug(f"Authentication result: user_id={user_id}, authenticated={is_authenticated}")
     logger.debug(f"User data: {user_data}")
     
-    # Get session ID from query params or create new one
-    session_id = query_dict.get('session_id', [str(uuid.uuid4())])[0]
-    logger.debug(f"Using session ID: {session_id}")
-    
-    # Check for tab/page info
-    current_page = query_dict.get('tab', ['home'])[0]
-    logger.debug(f"Current page: {current_page}")
-    
-    # Check for floating mode
-    is_floating = query_dict.get('floating', ['false'])[0].lower() == 'true'
-    logger.debug(f"Floating mode: {is_floating}")
-    
-    # Check for order ID
-    order_id = query_dict.get('order_id', [None])[0]
-    active_order = None
-    
-    if order_id:
-        logger.debug(f"Order ID from query params: {order_id}")
-        try:
-            # Try to load order data
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute('SELECT * FROM order_history WHERE order_id = ?', (order_id,))
-            result = c.fetchone()
-            conn.close()
-            
-            if result:
-                logger.debug(f"Found order in database: {order_id}")
-                active_order = {"id": order_id}
-        except Exception as e:
-            logger.error(f"Error loading order by ID: {e}")
-    
     # Build enhanced context
     context = {
-        "current_page": current_page,
+        "current_page": query_dict.get('tab', ['home'])[0],
         "user_id": user_id,
         "username": user_data.get('username', user_id),
         "email": user_data.get('email', ''),
+        "first_name": user_data.get('first_name', ''),
+        "last_name": user_data.get('last_name', ''),
+        "full_name": user_data.get('full_name', ''),
         "is_authenticated": is_authenticated,
-        "session_id": session_id,
-        "is_floating": is_floating
+        "session_id": query_dict.get('session_id', [str(uuid.uuid4())])[0],
+        "is_floating": query_dict.get('floating', ['false'])[0].lower() == 'true'
     }
     
-    # Add order data if available
-    if active_order:
-        context["active_order"] = active_order
+    # Check for active order
+    order_id = query_dict.get('order_id', [None])[0]
+    if order_id:
+        context["active_order"] = {"id": order_id}
     
     # Save to session
     cl.user_session.set("context", context)
     logger.debug(f"Saved context to session: {context}")
-    
-    # Upsert session in database
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute('''INSERT OR REPLACE INTO conversations
-                     (session_id, user_id, created_at, last_active)
-                     VALUES (?, ?, ?, ?)''',
-                  (session_id, user_id, datetime.now(), datetime.now()))
-        conn.commit()
-        conn.close()
-        logger.debug("Session saved to database")
-    except Exception as e:
-        logger.error(f"Error saving session to database: {e}")
     
     # Set up the agent
     try:
@@ -1557,16 +1505,18 @@ async def start():
     
     # Send personalized welcome
     try:
-        # Simple personalized welcome based on auth status
-        if is_authenticated:
-            welcome_msg = f"Welcome back, {context.get('username', 'valued customer')}! How can I assist you today?"
+        welcome_msg = ""
+        if is_authenticated and context.get('full_name'):
+            welcome_msg = f"Welcome back, {context['full_name']}! How can I assist you today?"
+        elif is_authenticated and context.get('username'):
+            welcome_msg = f"Welcome back, {context['username']}! How can I assist you today?"
         else:
             welcome_msg = "Welcome to Neo Cafe! How can I help you today?"
         
         # Add order context if available
-        if active_order:
+        if order_id:
             welcome_msg += f"\n\nI see you have an active order (#{order_id}). Would you like to check its status?"
-            
+        
         logger.debug(f"Sending welcome message: {welcome_msg}")
         await cl.Message(content=welcome_msg).send()
     except Exception as e:

@@ -33,24 +33,17 @@ def register_callbacks(app):
                 return dash.no_update
             
             # Check if this order belongs to the current user
-            # Enhanced: Check both user_id and username fields
             user_identifier = order_data.get('user_id') or order_data.get('username')
             current_username = current_user.get('username')
             
-            # Process orders that either:
-            # 1. Match the current user
-            # 2. Have no user specified (guest orders)
-            # 3. Have a user_id of 'guest' (also guest orders)
-            if user_identifier and user_identifier != "guest" and user_identifier != current_username:
-                print(f"Order {order_data['id']} belongs to {user_identifier}, not current user {current_username}")
-                return dash.no_update
-            
-            # Update the user's active order
-            updated_user = dict(current_user)
-            updated_user['active_order'] = order_data
-            
-            print(f"Updated user's active order to {order_data['id']}")
-            return updated_user
+            # Process orders that match the current user or are for guest
+            if not user_identifier or user_identifier == "guest" or user_identifier == current_username:
+                # Update the user's active order
+                updated_user = dict(current_user)
+                updated_user['active_order'] = order_data
+                
+                print(f"Updated user's active order to {order_data['id']}")
+                return updated_user
         
         except Exception as e:
             print(f"Error updating user's active order: {e}")
