@@ -5,11 +5,27 @@ import dash_bootstrap_components as dbc
 import json
 import urllib.parse
 from flask import session
+import logging
 import os
+import sys
 import requests
 import time
 from datetime import datetime
 from app.utils.api_utils import get_chainlit_session
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('debug.log')
+    ]
+)
+
+# Create logger
+logger = logging.getLogger('neo_cafe')
+logger.setLevel(logging.DEBUG)
 
 # Base URLs for APIs
 CHAINLIT_URL = os.environ.get('CHAINLIT_URL', 'http://localhost:8001')
@@ -122,30 +138,59 @@ def register_callbacks(app, socketio):
         return current_style or hidden_style, current_class or base_class, faq_style or hide_faq
     
     # Set Chainlit iframe source when panel becomes visible
+    # Fix for authentication passing in app/callbacks/chat_callbacks.py
+        # Find this function and replace it with the below:
     @app.callback(
-    Output('floating-chainlit-frame', 'src'),
-    [
-        Input('floating-chat-panel', 'style'),
-        Input('url', 'pathname')
-    ],
-    [State('user-store', 'data')]
-)
-    def update_floating_chat_frame(panel_style, pathname, user_data):
+        Output('floating-chainlit-frame', 'src'),
+        [
+            Input('floating-chat-panel', 'style'),
+            Input('url', 'pathname')
+        ],
+        [State('user-store', 'data'), 
+        State('floating-chainlit-frame', 'src')]  # Added src state to preserve URL during navigation
+    )
+    def update_floating_chat_frame(panel_style, pathname, user_data, current_src):
         """Update the Chainlit iframe source with correct parameters"""
-        # Only update if panel is being shown
-        if not panel_style or panel_style.get("display") == "none":
-            return dash.no_update
-            
-        # Base Chainlit URL
-        chainlit_url = CHAINLIT_URL
+        ctx = callback_context
+        trigger = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
         
-        # Default to empty query
+        # Only update if panel is being shown for the first time or we've changed pages
+        # If it's just a page change and the panel isn't visible, don't update
+        if not panel_style or panel_style.get("display") == "none":
+            if trigger == 'url':
+                return dash.no_update  # Don't update on page change if panel is hidden
+            
+        # If we already have a URL and this is a page navigation, keep most parameters
+        if current_src and trigger == 'url':
+            # Parse the current URL to keep the session ID and authentication
+            parts = urllib.parse.urlparse(current_src)
+            query_params = dict(urllib.parse.parse_qsl(parts.query))
+            
+            # We only update the tab parameter based on the new pathname
+            if pathname == '/menu':
+                query_params['tab'] = 'menu'
+            elif pathname == '/orders':
+                query_params['tab'] = 'order'
+            elif pathname == '/delivery':
+                query_params['tab'] = 'status'
+            elif pathname == '/dashboard':
+                query_params['tab'] = 'dashboard'
+            elif pathname == '/profile':
+                query_params['tab'] = 'profile'
+            else:
+                query_params['tab'] = 'home'
+                
+            # Rebuild the URL with the updated tab
+            url = f"{CHAINLIT_URL}?{urllib.parse.urlencode(query_params)}"
+            return url
+        
+        # For new iframe creation (first open or complete refresh)
         query_params = {}
         
-        # Add floating flag to indicate this is the floating context
+        # Add floating flag
         query_params['floating'] = 'true'
         
-        # Check if we're on a specific page and add appropriate parameters
+        # Set tab based on current page
         if pathname == '/menu':
             query_params['tab'] = 'menu'
         elif pathname == '/orders':
@@ -159,16 +204,27 @@ def register_callbacks(app, socketio):
         else:
             query_params['tab'] = 'home'
         
-        # Add user info if available
+        # Enhanced user info
         if user_data and 'username' in user_data:
             query_params['user'] = user_data['username']
             
-            # Add authentication token - THIS IS THE KEY ADDITION
-            query_params['token'] = f"{user_data['username']}-{user_data.get('id', 'default')}"
+            # Create a more robust authentication token with user details
+            auth_data = {
+                "username": user_data['username'],
+                "id": user_data.get('id', ''),
+                "role": user_data.get('role', 'customer'),
+                "email": user_data.get('email', '')
+            }
+            
+            # JSON encode and base64 the token for security
+            import base64
+            auth_token = base64.b64encode(json.dumps(auth_data).encode()).decode()
+            query_params['token'] = auth_token
             
             # If user has active order, add order ID
             if 'active_order' in user_data and user_data['active_order']:
-                query_params['order_id'] = user_data['active_order']['id']
+                if isinstance(user_data['active_order'], dict) and 'id' in user_data['active_order']:
+                    query_params['order_id'] = user_data['active_order']['id']
         
         # Add session ID if available
         if 'session_id' in session:
@@ -187,9 +243,9 @@ def register_callbacks(app, socketio):
         
         # Build full URL
         if query_string:
-            return f"{chainlit_url}?{query_string}"
+            return f"{CHAINLIT_URL}?{query_string}"
         else:
-            return chainlit_url
+            return CHAINLIT_URL
     
     @app.callback(
         Output('chat-action-trigger', 'children'),

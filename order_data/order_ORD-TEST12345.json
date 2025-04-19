@@ -1,0 +1,1 @@
+{"id": "ORD-TEST12345", "user_id": "testuser", "username": "testuser", "items": [{"item_id": 1, "quantity": 1, "special_instructions": ""}, {"item_id": 2, "quantity": 2, "special_instructions": ""}], "delivery_location": "Table 3", "total": 11.95, "timestamp": "2025-04-18T12:00:00", "status": "New"}

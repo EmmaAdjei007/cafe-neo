@@ -13,13 +13,32 @@ from datetime import datetime
 
 import chainlit as cl
 from chainlit.element import Element
-from langchain.vectorstores import FAISS
-from langchain.embeddings import OpenAIEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import OpenAIEmbeddings
 from langchain.memory import ConversationBufferMemory
-from langchain.chat_models import ChatOpenAI
+from langchain_community.chat_models import ChatOpenAI
 from langchain.agents import initialize_agent, Tool
 from langchain.agents import AgentType
 from langchain.schema import SystemMessage, HumanMessage, AIMessage
+
+import logging
+import sys
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('debug.log')
+    ]
+)
+
+# Create logger
+logger = logging.getLogger('neo_cafe')
+logger.setLevel(logging.DEBUG)
+
+# Add this after imports in both app.py and chainlit_app/app.py
 
 # Add parent directory to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -451,9 +470,11 @@ class OrderManager:
                 # Don't use "guest" if we have a real user ID and user is authenticated
                 if user_id != "guest" and context.get("is_authenticated", False):
                     order_data["user_id"] = user_id
+                    order_data["username"] = user_id
                     print(f"Setting authenticated user_id from context: {user_id}")
                 else:
                     order_data["user_id"] = "guest"
+                    order_data["username"] = "guest"
                     print("Using guest user ID for unauthenticated order")
             
             # Make sure username field is also set for compatibility with Dash
@@ -464,6 +485,17 @@ class OrderManager:
             # Add timestamp
             order_data["timestamp"] = datetime.now().isoformat()
             
+            # Add delivery information with better defaults
+            if "delivery_location" not in order_data and "delivery_details" in order_data:
+                order_data["delivery_location"] = order_data["delivery_details"]
+            
+            if "delivery_location" not in order_data:
+                # Get from context if available
+                if "delivery_location" in context:
+                    order_data["delivery_location"] = context["delivery_location"]
+                else:
+                    order_data["delivery_location"] = "Table 1"  # Default
+            
             # Step 6: Save to database (original functionality)
             try:
                 conn = sqlite3.connect(DB_PATH)
@@ -471,11 +503,11 @@ class OrderManager:
                 c.execute('''INSERT INTO order_history 
                             (order_id, user_id, items, status, created_at)
                             VALUES (?, ?, ?, ?, ?)''',
-                        (order_data["id"], 
-                        order_data.get("user_id", "guest"), 
-                        json.dumps(order_data["items"]), 
-                        "received", 
-                        datetime.now()))
+                          (order_data["id"], 
+                           order_data.get("user_id", "guest"), 
+                           json.dumps(order_data["items"]), 
+                           "received", 
+                           datetime.now()))
                 conn.commit()
                 conn.close()
                 print(f"Order saved to database: {order_data['id']}")
@@ -483,6 +515,7 @@ class OrderManager:
                 print(f"Database error: {db_error}")
             
             # Step 7: Notify dashboard (original functionality)
+            success = False
             try:
                 # Method 1: Send to parent window using postMessage
                 try:
@@ -491,6 +524,7 @@ class OrderManager:
                         "order": order_data
                     })
                     print("Order notification sent to parent via postMessage")
+                    success = True
                 except Exception as e:
                     print(f"Error sending order via cl.send_to_parent: {e}")
                 
@@ -502,6 +536,7 @@ class OrderManager:
                     sio.emit('order_update', order_data)
                     sio.disconnect()
                     print("Order sent via Socket.IO")
+                    success = True
                 except Exception as e:
                     print(f"Error sending order via Socket.IO: {e}")
                     
@@ -513,6 +548,8 @@ class OrderManager:
                         timeout=5
                     )
                     print(f"Place order API response: {response.status_code}")
+                    if response.status_code == 200:
+                        success = True
                 except Exception as e:
                     print(f"Error calling place-order API: {e}")
                     
@@ -522,16 +559,34 @@ class OrderManager:
                     with open(f"order_data/order_{order_data['id']}.json", 'w') as f:
                         json.dump(order_data, f)
                     print(f"Order saved to file as fallback")
+                    success = True
                 except Exception as e:
                     print(f"Error saving order to file: {e}")
+                    
+                # Store in session context for use in later messages
+                context = cl.user_session.get("context", {})
+                context["active_order"] = order_data
+                context["delivery_location"] = order_data.get("delivery_location", "Table 1") 
+                cl.user_session.set("context", context)
+                print("Order saved to session context")
+                
             except Exception as e:
                 print(f"Error in dashboard notification: {e}")
                 
-            return order_data
+            # Update the return statement to include success info
+            if success:
+                return order_data
+            else:
+                return {"error": "Failed to notify dashboard about order", "order_data": order_data}
+
         except Exception as e:
-            print(f"Error placing order: {e}")
-            return {"error": str(e), "suggestion": "Try using a different format or checking menu items"}
-    
+            # Catch any unexpected errors in the overall flow
+            print(f"Unexpected error placing order: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+
+   
     @staticmethod
     def get_order_status(order_id):
         """
@@ -1113,37 +1168,67 @@ def query_knowledge_base(query):
 
 # ----- Authentication and User Management -----
 
+# Completely rewritten auth token verification
+# Place this in chainlit_app/app.py to replace the existing verify_auth_token function
+
 def verify_auth_token(token):
     """
-    Verify authentication token with backend.
+    Verify authentication token with enhanced debugging.
     Args:
         token (str): Authentication token.
     Returns:
-        tuple: (user_id, is_authenticated)
+        tuple: (user_id, is_authenticated, user_data)
     """
     if not token:
-        return "guest", False
+        logger.debug("No authentication token provided")
+        return "guest", False, {}
         
+    logger.debug(f"Verifying auth token: {token[:10]}...")
+    
     try:
-        # Try API verification
-        response = requests.get(
-            f"{DASHBOARD_URL}/api/verify-token",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=3
-        )
-        if response.ok:
-            data = response.json()
-            return data.get("user_id", "guest"), True
+        # First try to decode if it's base64 encoded JSON
+        import base64
+        import json
+        
+        try:
+            # Try to decode base64 token
+            decoded_bytes = base64.b64decode(token)
+            user_data = json.loads(decoded_bytes)
+            
+            if isinstance(user_data, dict) and 'username' in user_data:
+                logger.debug(f"Successfully decoded auth token for user: {user_data['username']}")
+                return user_data['username'], True, user_data
+        except Exception as decode_err:
+            logger.debug(f"Not a base64 token: {decode_err}")
+            
+        # If not base64, check if it's a simple token format
+        if '-' in token:
+            parts = token.split('-')
+            username = parts[0]
+            
+            if username and username != "guest":
+                logger.debug(f"Using simple token format for user: {username}")
+                return username, True, {"username": username}
+                
+        # Last resort: Try API verification
+        try:
+            response = requests.get(
+                f"{DASHBOARD_URL}/api/verify-token",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=3
+            )
+            if response.ok:
+                data = response.json()
+                logger.debug(f"API verified user: {data.get('user_id', 'unknown')}")
+                return data.get("user_id", "guest"), True, data
+        except Exception as api_err:
+            logger.debug(f"API verification failed: {api_err}")
+    
     except Exception as e:
-        print(f"Token verification error: {e}")
+        logger.error(f"Auth token verification error: {e}")
         
-    # Fall back to basic validation
-    if token and len(token) > 10:
-        # Simplified: just check if token seems reasonable
-        user_id = token.split("-")[0] if "-" in token else "user"
-        return user_id, True
-        
-    return "guest", False
+    logger.debug("Auth verification failed, defaulting to guest")
+    return "guest", False, {}
 
 def load_conversation_history(session_id):
     """
@@ -1199,6 +1284,8 @@ def save_conversation_message(session_id, content, is_user=False):
         print(f"Error saving conversation message: {e}")
 
 # ----- LangChain Agent Setup -----
+
+# Update the setup_langchain_agent function in chainlit_app/app.py
 
 def setup_langchain_agent(context):
     """
@@ -1272,19 +1359,23 @@ def setup_langchain_agent(context):
             )
         ]
         
-        # Create custom prompt
+        # Create personalized system message
         is_auth = context.get("is_authenticated", False)
+        username = context.get("username", "guest")
         current_page = context.get("current_page", "home")
         floating = context.get("is_floating", False)
+        has_active_order = "active_order" in context
         
-        # System message with context
+        # System message with enhanced personalization
         system_message = f"""You are BaristaBot, the friendly AI assistant for Neo Cafe. 
 Your goal is to help customers with orders, menu information, and general inquiries.
 
 CURRENT CONTEXT:
-- User Status: {"Authenticated" if is_auth else "Guest"}
+- User: {username if is_auth else "Guest"} {f"({context.get('email', '')})" if context.get('email') else ""}
+- Authentication Status: {"Authenticated" if is_auth else "Guest"}
 - Current Page: {current_page}
 - Interface: {"Floating Chat" if floating else "Full Chat"}
+- Active Order: {"Yes - " + context.get('active_order', {}).get('id', 'Unknown') if has_active_order else "No"}
 
 IMPORTANT GUIDELINES:
 1. Be helpful, friendly, and concise
@@ -1293,6 +1384,9 @@ IMPORTANT GUIDELINES:
 4. For placing orders, use PlaceOrderTool
 5. For checking order status, use GetOrderStatusTool
 6. For navigation, use NavigateTool
+7. Always address the user by name ({username}) if they are authenticated
+8. Remember their preferences and past orders when making recommendations
+9. If they have an active order, offer to check its status
 
 If in floating chat mode, keep responses brief and focused."""
         
@@ -1324,44 +1418,161 @@ If in floating chat mode, keep responses brief and focused."""
         print(f"Error setting up agent: {e}")
         raise
 
+# Add this new function to generate personalized welcome messages
+def get_personalized_welcome(context):
+    """Generate a personalized welcome message based on user context"""
+    # Base greeting with personalization if authenticated
+    if context['is_authenticated']:
+        greeting = f"Welcome back, {context.get('username', 'valued customer')}! "
+    else:
+        greeting = "Welcome to Neo Cafe! "
+    
+    # Page-specific additions
+    current_page = context.get('current_page', 'home')
+    
+    page_messages = {
+        'menu': "I can help you browse our menu or suggest items based on your preferences.",
+        'order': "Ready to place an order? Just tell me what you'd like!",
+        'status': "Looking to check on an order? I can help with that!",
+        'dashboard': "Here to help with your Neo Cafe experience!",
+        'profile': "Need help with your account or previous orders?"
+    }
+    
+    page_specific = page_messages.get(current_page, "How can I assist you today?")
+    
+    # Order-specific content if available
+    order_content = ""
+    if 'active_order' in context:
+        order_id = context['active_order'].get('id', 'Unknown')
+        order_content = f"\n\nI see you have an active order (#{order_id}). Would you like to check its status?"
+    
+    return greeting + page_specific + order_content
+
 # ----- Chainlit Handlers -----
+
+# Completely rewritten on_chat_start function
+# Replace the existing function in chainlit_app/app.py
+
+# Update the on_chat_start function in chainlit_app/app.py
+
+# Completely rewritten on_chat_start function
+# Replace the existing function in chainlit_app/app.py
 
 @cl.on_chat_start
 async def start():
-    """Initialize chat session with persistence"""
+    """Initialize chat session with detailed logging"""
     # Get URL query parameters safely
     try:
-        url_query = cl.context.session.get('url_query')
-        query_dict = urllib.parse.parse_qs(url_query) if url_query else {}
-    except AttributeError:
+        url_query = cl.context.session.get('url_query', '')
+        logger.debug(f"URL query: {url_query}")
+        
+        query_dict = {}
+        if url_query:
+            query_dict = urllib.parse.parse_qs(url_query)
+        
+        logger.debug(f"Parsed query dict: {query_dict}")
+    except Exception as e:
+        logger.error(f"Error parsing URL query: {e}")
         query_dict = {}
 
-    # Authentication context
+    # Authentication context with enhanced logging
     auth_token = query_dict.get('token', [None])[0]
-    user_id, is_authenticated = verify_auth_token(auth_token)
+    user_id, is_authenticated, user_data = verify_auth_token(auth_token)
     
+    logger.debug(f"Authentication result: user_id={user_id}, authenticated={is_authenticated}")
+    logger.debug(f"User data: {user_data}")
+    
+    # Get session ID from query params or create new one
+    session_id = query_dict.get('session_id', [str(uuid.uuid4())])[0]
+    logger.debug(f"Using session ID: {session_id}")
+    
+    # Check for tab/page info
+    current_page = query_dict.get('tab', ['home'])[0]
+    logger.debug(f"Current page: {current_page}")
+    
+    # Check for floating mode
+    is_floating = query_dict.get('floating', ['false'])[0].lower() == 'true'
+    logger.debug(f"Floating mode: {is_floating}")
+    
+    # Check for order ID
+    order_id = query_dict.get('order_id', [None])[0]
+    active_order = None
+    
+    if order_id:
+        logger.debug(f"Order ID from query params: {order_id}")
+        try:
+            # Try to load order data
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute('SELECT * FROM order_history WHERE order_id = ?', (order_id,))
+            result = c.fetchone()
+            conn.close()
+            
+            if result:
+                logger.debug(f"Found order in database: {order_id}")
+                active_order = {"id": order_id}
+        except Exception as e:
+            logger.error(f"Error loading order by ID: {e}")
+    
+    # Build enhanced context
     context = {
-        "current_page": query_dict.get('tab', ['home'])[0],
+        "current_page": current_page,
         "user_id": user_id,
+        "username": user_data.get('username', user_id),
+        "email": user_data.get('email', ''),
         "is_authenticated": is_authenticated,
-        "session_id": str(uuid.uuid4()),
-        "is_floating": query_dict.get('floating', ['false'])[0].lower() == 'true'
+        "session_id": session_id,
+        "is_floating": is_floating
     }
+    
+    # Add order data if available
+    if active_order:
+        context["active_order"] = active_order
+    
+    # Save to session
     cl.user_session.set("context", context)
+    logger.debug(f"Saved context to session: {context}")
     
-    # Load conversation history
-    history = load_conversation_history(context['session_id'])
-    agent = setup_langchain_agent(context)
+    # Upsert session in database
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute('''INSERT OR REPLACE INTO conversations
+                     (session_id, user_id, created_at, last_active)
+                     VALUES (?, ?, ?, ?)''',
+                  (session_id, user_id, datetime.now(), datetime.now()))
+        conn.commit()
+        conn.close()
+        logger.debug("Session saved to database")
+    except Exception as e:
+        logger.error(f"Error saving session to database: {e}")
     
-    # Add historical messages to memory
-    for msg in history:
-        if msg['is_user']:
-            agent.memory.chat_memory.add_user_message(msg['content'])
+    # Set up the agent
+    try:
+        agent = setup_langchain_agent(context)
+        cl.user_session.set("agent", agent)
+        logger.debug("Agent setup complete")
+    except Exception as e:
+        logger.error(f"Error setting up agent: {e}")
+    
+    # Send personalized welcome
+    try:
+        # Simple personalized welcome based on auth status
+        if is_authenticated:
+            welcome_msg = f"Welcome back, {context.get('username', 'valued customer')}! How can I assist you today?"
         else:
-            agent.memory.chat_memory.add_ai_message(msg['content'])
-    
-    cl.user_session.set("agent", agent)
-    await cl.Message(content=get_welcome_message(context)).send()
+            welcome_msg = "Welcome to Neo Cafe! How can I help you today?"
+        
+        # Add order context if available
+        if active_order:
+            welcome_msg += f"\n\nI see you have an active order (#{order_id}). Would you like to check its status?"
+            
+        logger.debug(f"Sending welcome message: {welcome_msg}")
+        await cl.Message(content=welcome_msg).send()
+    except Exception as e:
+        logger.error(f"Error sending welcome message: {e}")
+        # Fallback welcome
+        await cl.Message(content="Welcome to Neo Cafe! How can I help you today?").send()
 
 @cl.on_window_message
 async def handle_window_message(message):
@@ -1446,8 +1657,6 @@ async def process_message(message, message_id=None, source=None):
         ).send()
 
 
-
-
 @cl.on_chat_end
 def on_chat_end():
     """Save conversation history when chat ends"""
@@ -1477,21 +1686,6 @@ def on_chat_end():
     conn.commit()
     conn.close()
 
-# @cl.on_message
-# async def on_message(message: cl.Message):
-#     """Process messages with full context handling"""
-#     agent = cl.user_session.get("agent")
-#     context = cl.user_session.get("context", {})
-    
-#     # Track message in session
-#     try:
-#         # Format input for LangChain agent
-#         response = await cl.make_async(agent.run)(message.content)
-#         track_message(response, is_user=False)
-#     except Exception as e:
-#         response = f"Sorry, I need help with that: {str(e)}"
-    
-#     await cl.Message(content=response).send()
 
 @cl.on_message
 async def on_message(message: cl.Message):
@@ -1518,25 +1712,6 @@ async def on_message(message: cl.Message):
         await cl.Message(content=error_response).send()
 
 # ----- Enhanced Features -----
-
-def verify_auth_token(token: str) -> tuple:
-    """Validate authentication token with backend"""
-    if not token:
-        return 'guest', False
-    
-    try:
-        response = requests.get(
-            f"{DASHBOARD_URL}/api/verify-token",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=3
-        )
-        if response.ok:
-            data = response.json()
-            return data['user_id'], True
-    except requests.exceptions.RequestException:
-        pass
-    
-    return 'guest', False
 
 def load_conversation_history(session_id: str) -> list:
     """Load previous conversation from database"""

@@ -14,10 +14,10 @@ def register_callbacks(app):
     """
 
     @app.callback(
-Output("user-store", "data", allow_duplicate=True),
-[Input("socket-order-update", "children")],
-[State("user-store", "data")],
-prevent_initial_call=True
+    Output("user-store", "data", allow_duplicate=True),
+    [Input("socket-order-update", "children")],
+    [State("user-store", "data")],
+    prevent_initial_call=True
 )
     def update_user_active_order(socket_update, current_user):
         """Update user's active order when a new order is received"""
@@ -55,7 +55,7 @@ prevent_initial_call=True
         except Exception as e:
             print(f"Error updating user's active order: {e}")
             return dash.no_update
-
+    
     @app.callback(
         [
             Output("login-alert", "children"),

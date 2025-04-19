@@ -6,7 +6,7 @@ import os
 # Get Chainlit URL from environment variables or use default
 CHAINLIT_URL = os.environ.get('CHAINLIT_URL', 'http://localhost:8000')
 
-from dash import Dash, dcc, html
+from dash import Dash, dcc, html, Input, Output, State, callback_context
 import dash_bootstrap_components as dbc
 from flask import Flask
 from flask_socketio import SocketIO
@@ -29,6 +29,26 @@ from app.callbacks import register_all_callbacks
 from app.layouts import register_order_update_callback
 from app.config import config
 from server import configure_server
+
+
+import logging
+import sys
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('debug.log')
+    ]
+)
+
+# Create logger
+logger = logging.getLogger('neo_cafe')
+logger.setLevel(logging.DEBUG)
+
+# Add this after imports in both app.py and chainlit_app/app.py
 
 # Initialize Flask and SocketIO with proper config
 server = Flask(__name__, 
@@ -54,7 +74,6 @@ external_stylesheets = [
 
 external_scripts = [
     '/assets/js/chat_client.js',  # Add chat client JS
-    # '/assets/js/clientside.js' ,   # Add clientside JS
     'assets/js/direct_message_handler.js',  # Add direct message handler JS
     '/assets/js/chat_messenger.js',  # Add chat messenger JS
 ]
@@ -73,7 +92,71 @@ app.title = "Neo Cafe - Give me coffee or give me death"
 logger.info("Initializing Neo Cafe Dashboard")
 logger.info(f"Chainlit URL: {CHAINLIT_URL}")
 
-# Custom index string to inject environment variables for JavaScript
+
+# Add this to app.py before the layout definition
+# This adds chat persistence through page navigation
+
+# Add this JavaScript to the index_string for chat persistence
+chat_persistence_js = '''
+<script>
+    // Chat state persistence
+    window.addEventListener('DOMContentLoaded', function() {
+        console.log("Setting up chat persistence");
+        
+        // Store chat state when navigating
+        window.addEventListener('beforeunload', function(event) {
+            // Only store if not actually leaving the site
+            if (event.currentTarget.location.hostname === window.location.hostname) {
+                const chatPanel = document.getElementById('floating-chat-panel');
+                if (chatPanel) {
+                    const isVisible = chatPanel.style.display !== 'none';
+                    const isMinimized = chatPanel.className.includes('minimized');
+                    const isExpanded = chatPanel.className.includes('expanded');
+                    
+                    localStorage.setItem('chat_visible', isVisible);
+                    localStorage.setItem('chat_minimized', isMinimized);
+                    localStorage.setItem('chat_expanded', isExpanded);
+                    console.log(`Stored chat state: visible=${isVisible}, minimized=${isMinimized}, expanded=${isExpanded}`);
+                }
+            }
+        });
+        
+        // Restore chat state after navigation (with a slight delay)
+        setTimeout(function() {
+            try {
+                const chatVisible = localStorage.getItem('chat_visible') === 'true';
+                const chatMinimized = localStorage.getItem('chat_minimized') === 'true';
+                const chatExpanded = localStorage.getItem('chat_expanded') === 'true';
+                
+                console.log(`Restoring chat state: visible=${chatVisible}, minimized=${chatMinimized}, expanded=${chatExpanded}`);
+                
+                const chatPanel = document.getElementById('floating-chat-panel');
+                const chatButton = document.getElementById('floating-chat-button');
+                
+                if (chatPanel && chatVisible) {
+                    chatPanel.style.display = 'flex';
+                    
+                    // Apply correct class
+                    if (chatMinimized) {
+                        chatPanel.className = 'floating-chat-panel minimized';
+                    } else if (chatExpanded) {
+                        chatPanel.className = 'floating-chat-panel expanded';
+                        // Also show FAQ section if expanded
+                        const faqSection = document.getElementById('chat-faq-section');
+                        if (faqSection) faqSection.style.display = 'block';
+                    } else {
+                        chatPanel.className = 'floating-chat-panel';
+                    }
+                }
+            } catch (e) {
+                console.error("Error restoring chat state:", e);
+            }
+        }, 500);
+    });
+</script>
+'''
+
+# Update the app.index_string to include the persistence JS
 app.index_string = '''
 <!DOCTYPE html>
 <html>
@@ -89,6 +172,7 @@ app.index_string = '''
             window.DEBUG_MODE = true;
             console.log("Neo Cafe Dashboard Initializing...");
         </script>
+        ''' + chat_persistence_js + '''
     </head>
     <body>
         {%app_entry%}
@@ -111,14 +195,22 @@ app.layout = create_main_layout()
 register_order_update_callback(app)
 register_all_callbacks(app, socketio)
 
+
+
 # This is now handled by run_with_eventlet.py
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8050))
-    debug = os.environ.get('DEBUG', 'True').lower() == 'true'
-    
-    logger.info(f"Starting Neo Cafe Dashboard on port {port} (debug={debug})")
-    logger.info("Visit http://localhost:8050 in your browser")
-    logger.info("For better Socket.IO performance, run using 'python run_with_eventlet.py' instead")
-    
-    # Fallback to using the Dash run method when run directly
-    app.run(debug=debug, port=port)
+    import sys
+    try:
+        port = int(os.environ.get('PORT', 8050))
+        debug = os.environ.get('DEBUG', 'True').lower() == 'true'
+        
+        logger.info(f"Starting Neo Cafe Dashboard on port {port} (debug={debug})")
+        logger.info("Visit http://localhost:8050 in your browser")
+        logger.info("For better Socket.IO performance, run using 'python run_with_eventlet.py' instead")
+        
+        # Fallback to using the Dash run method when run directly
+        app.run(debug=debug, port=port)
+    except Exception as e:
+        print(f"ERROR: Failed to start the application: {e}")
+        import traceback
+        traceback.print_exc(file=sys.stdout)   
