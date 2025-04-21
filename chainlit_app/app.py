@@ -1713,6 +1713,139 @@ async def on_message(message: cl.Message):
         track_message(error_response, is_user=False)
         await cl.Message(content=error_response).send()
 
+
+# Replace the existing handle_auth_message function with this improved version
+
+@cl.on_window_message
+async def handle_auth_message(message):
+    """
+    Handle authentication messages from the parent window (Dash app)
+    with improved stability and error handling
+    """
+    logger.debug(f"Received window message: {message}")
+    
+    # Check if this is an auth update message
+    if isinstance(message, dict) and message.get('type') == 'auth_update':
+        try:
+            # Extract user and token
+            user = message.get('user')
+            token = message.get('token')
+            auth_status = message.get('auth_status', False)
+            
+            logger.debug(f"Received auth update for user: {user}")
+            
+            if not user or not token or not auth_status:
+                logger.warning("Incomplete auth data received")
+                return
+                
+            # Get current context
+            context = cl.user_session.get("context", {})
+            
+            # Skip if already authenticated as this user
+            if context.get('is_authenticated', False) and context.get('username') == user:
+                logger.debug(f"Already authenticated as {user}, skipping re-auth")
+                return
+                
+            # Make sure we have a session ID to preserve history
+            session_id = context.get('session_id')
+            if not session_id:
+                # Generate a stable session ID based on username
+                import hashlib
+                session_id = f"user-{hashlib.md5(user.encode()).hexdigest()[:12]}"
+                logger.debug(f"Generated stable session_id for auth: {session_id}")
+                
+            # Try to decode the token
+            try:
+                import base64
+                import json
+                
+                # Add padding if needed
+                missing_padding = len(token) % 4
+                if missing_padding:
+                    token += '=' * (4 - missing_padding)
+                    
+                decoded_bytes = base64.b64decode(token)
+                user_data = json.loads(decoded_bytes)
+                
+                if not isinstance(user_data, dict) or user_data.get('username') != user:
+                    logger.warning(f"Invalid token for user {user}")
+                    return
+                
+                # Create updated context
+                updated_context = {
+                    # Preserve existing context keys
+                    **context,
+                    # Add/update auth info
+                    "user_id": user,
+                    "username": user,
+                    "email": user_data.get("email", ""),
+                    "first_name": user_data.get("first_name", ""),
+                    "last_name": user_data.get("last_name", ""),
+                    "is_authenticated": True,
+                    # Always ensure session_id is set
+                    "session_id": session_id
+                }
+                
+                # Add full name if available
+                first_name = user_data.get("first_name", "")
+                last_name = user_data.get("last_name", "")
+                if first_name or last_name:
+                    full_name = f"{first_name} {last_name}".strip()
+                    updated_context["full_name"] = full_name
+                
+                # Update persistent session if available
+                try:
+                    if 'session_id' in updated_context:
+                        persistent_session = get_persistent_session(updated_context['session_id'])
+                        persistent_session["context"] = updated_context
+                        logger.debug(f"Updated persistent session with auth info")
+                except Exception as ps_err:
+                    logger.error(f"Error updating persistent session: {ps_err}")
+                
+                # Save updated context
+                cl.user_session.set("context", updated_context)
+                logger.debug(f"Updated context from token: {updated_context}")
+                
+                # Re-initialize the agent only if not already authenticated
+                if not context.get('is_authenticated'):
+                    try:
+                        agent = initialize_agent_safely(updated_context)
+                        cl.user_session.set("agent", agent)
+                        logger.debug("Re-initialized agent with auth context")
+                        
+                        # Update persistent session
+                        try:
+                            if 'session_id' in updated_context:
+                                persistent_session = get_persistent_session(updated_context['session_id'])
+                                persistent_session["agent_initialized"] = True
+                        except Exception as ps_err:
+                            logger.error(f"Error updating persistent session for agent: {ps_err}")
+                        
+                        # Send acknowledgment message only for new authentication
+                        display_name = updated_context.get('full_name') or user
+                        await cl.Message(content=f"Welcome, {display_name}! How can I help you today?").send()
+                    except Exception as agent_err:
+                        logger.error(f"Error re-initializing agent: {agent_err}")
+                else:
+                    logger.debug("Skipping agent reinitialization, already authenticated")
+                    
+                # Send confirmation to parent window
+                try:
+                    cl.send_to_parent({
+                        "type": "auth_confirmed",
+                        "user": user,
+                        "session_id": session_id
+                    })
+                except Exception as send_err:
+                    logger.error(f"Error sending auth confirmation: {send_err}")
+                
+            except Exception as decode_err:
+                logger.error(f"Error decoding token: {decode_err}")
+        except Exception as e:
+            logger.error(f"Error processing auth message: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
 @cl.on_window_message
 async def handle_window_message(message):
     """
