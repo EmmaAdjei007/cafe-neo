@@ -28,6 +28,30 @@ def configure_server(server, socketio):
         server (Flask): Flask server instance
         socketio (SocketIO): SocketIO instance
     """
+    @server.route('/chainlit-status', methods=['GET'])
+    def chainlit_status():
+        """API endpoint to check Chainlit status"""
+        try:
+            # Try to ping the chainlit server
+            chainlit_url = os.environ.get('CHAINLIT_URL', 'http://localhost:8000')
+            response = requests.get(f"{chainlit_url}/ping", timeout=2)
+            
+            if response.ok:
+                return jsonify({
+                    'status': 'online',
+                    'message': 'Chainlit is online and responding'
+                })
+            else:
+                return jsonify({
+                    'status': 'error',
+                    'message': f"Chainlit returned status code: {response.status_code}"
+                })
+        except Exception as e:
+            return jsonify({
+                'status': 'error',
+                'message': f"Could not connect to Chainlit: {str(e)}"
+            })
+
     # Chainlit proxy route
     @server.route('/chainlit')
     def chainlit_proxy():
@@ -374,4 +398,24 @@ def configure_server(server, socketio):
             return result
         except Exception as e:
             print(f"Error handling new order: {e}")
+            return {"status": "error", "message": str(e)}
+        
+    @socketio.on('auth_update')
+    def handle_auth_update(data):
+        """
+        Handle authentication updates and broadcast to clients
+        
+        Args:
+            data (dict): Authentication data
+        """
+        try:
+            print(f"Auth update received: {data}")
+            
+            # Broadcast the auth update to all clients
+            socketio.emit('auth_update', data)
+            
+            # Return success
+            return {"status": "success", "message": "Auth update broadcast successfully"}
+        except Exception as e:
+            print(f"Error handling auth update: {e}")
             return {"status": "error", "message": str(e)}

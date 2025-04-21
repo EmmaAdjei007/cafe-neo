@@ -13,6 +13,37 @@ def register_callbacks(app):
         app: Dash application instance
     """
 
+
+    @app.callback(
+    Output('chat-auth-update', 'data', allow_duplicate=True),
+    [Input('user-store', 'data')],
+    prevent_initial_call=True
+)
+    def update_chat_auth(user_data):
+        """Pass authentication data to chat when user logs in"""
+        if not user_data:
+            return dash.no_update
+        
+        try:
+            # If we have user data, try to notify the chat component
+            if 'username' in user_data:
+                # Try to notify via stored socket connection
+                if hasattr(app, 'socketio'):
+                    app.socketio.emit('auth_update', {
+                        'username': user_data['username'],
+                        'user_id': user_data.get('id', ''),
+                        'auth_status': True
+                    })
+                
+                print(f"Auth update sent to chat for user: {user_data['username']}")
+                
+                # Return user data for client-side handling
+                return user_data
+        except Exception as e:
+            print(f"Error updating chat auth: {e}")
+        
+        return dash.no_update
+
     @app.callback(
     Output("user-store", "data", allow_duplicate=True),
     [Input("socket-order-update", "children")],

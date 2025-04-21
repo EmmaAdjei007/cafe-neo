@@ -226,6 +226,9 @@ def register_callbacks(app, socketio):
             auth_token = base64.b64encode(json.dumps(auth_data).encode()).decode()
             query_params['token'] = auth_token
             
+            # Also add the username directly as a fallback
+            query_params['user'] = user_data['username']
+
             # If user has active order, add order ID
             if 'active_order' in user_data and user_data['active_order']:
                 if isinstance(user_data['active_order'], dict) and 'id' in user_data['active_order']:

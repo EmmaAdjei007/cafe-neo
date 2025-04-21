@@ -1161,9 +1161,6 @@ def query_knowledge_base(query):
 
 # ----- Authentication and User Management -----
 
-# Completely rewritten auth token verification
-# Place this in chainlit_app/app.py to replace the existing verify_auth_token function
-
 def verify_auth_token(token):
     """
     Verify authentication token with enhanced debugging
@@ -1184,8 +1181,14 @@ def verify_auth_token(token):
         import json
         
         try:
-            # Try to decode base64 token
-            decoded_bytes = base64.b64decode(token)
+            # Try to decode base64 token - handle potential padding issues
+            token_bytes = token.encode('utf-8')
+            # Add padding if needed
+            missing_padding = len(token_bytes) % 4
+            if missing_padding:
+                token_bytes += b'=' * (4 - missing_padding)
+                
+            decoded_bytes = base64.b64decode(token_bytes)
             user_data = json.loads(decoded_bytes)
             
             if isinstance(user_data, dict) and 'username' in user_data:
@@ -1197,7 +1200,7 @@ def verify_auth_token(token):
                         user_data['full_name'] = full_name
                 return user_data['username'], True, user_data
         except Exception as decode_err:
-            logger.debug(f"Not a base64 token: {decode_err}")
+            logger.debug(f"Not a base64 token: {str(decode_err)}")
             
         # If not base64, check if it's a simple token format
         if '-' in token:
@@ -1220,10 +1223,10 @@ def verify_auth_token(token):
                 logger.debug(f"API verified user: {data.get('user_id', 'unknown')}")
                 return data.get("user_id", "guest"), True, data
         except Exception as api_err:
-            logger.debug(f"API verification failed: {api_err}")
+            logger.debug(f"API verification failed: {str(api_err)}")
     
     except Exception as e:
-        logger.error(f"Auth token verification error: {e}")
+        logger.error(f"Auth token verification error: {str(e)}")
         
     logger.debug("Auth verification failed, defaulting to guest")
     return "guest", False, {}
@@ -1447,31 +1450,100 @@ def get_personalized_welcome(context):
     return greeting + page_specific + order_content
 
 # ----- Chainlit Handlers -----
-
 @cl.on_chat_start
 async def start():
     """Initialize chat session with detailed logging"""
-    # Get URL query parameters safely
+    # Get URL query parameters safely - with better error handling
     try:
-        url_query = cl.context.session.get('url_query', '')
-        logger.debug(f"URL query: {url_query}")
-        
+        url_query = ""
+        # First try the new way (safer)
+        if hasattr(cl.context, 'request') and hasattr(cl.context.request, 'query_string'):
+            url_query = cl.context.request.query_string.decode('utf-8')
+            logger.debug(f"URL query from request: {url_query}")
+        # Fallback to session dict (may cause the error)
+        elif hasattr(cl.context, 'session') and isinstance(cl.context.session, dict):
+            url_query = cl.context.session.get('url_query', '')
+            logger.debug(f"URL query from session dict: {url_query}")
+        # Final fallback in case session is an object with get method
+        elif hasattr(cl.context, 'session') and hasattr(cl.context.session, 'get'):
+            try:
+                # Try with one argument to avoid signature mismatch
+                url_query = cl.context.session.get('url_query')
+                logger.debug(f"URL query from session object (1 arg): {url_query}")
+            except TypeError:
+                logger.debug("Session.get() caused TypeError, trying alternate access")
+                if hasattr(cl.context.session, '__dict__'):
+                    url_query = cl.context.session.__dict__.get('url_query', '')
+                    logger.debug(f"URL query from session.__dict__: {url_query}")
+        logger.debug(f"Final URL query: {url_query}")
+
         query_dict = {}
         if url_query:
             query_dict = urllib.parse.parse_qs(url_query)
-        
         logger.debug(f"Parsed query dict: {query_dict}")
     except Exception as e:
         logger.error(f"Error parsing URL query: {e}")
         query_dict = {}
 
-    # Authentication context with enhanced logging
+    # Add a fallback for detecting login status via cookies
+    is_fallback_auth = False
+    try:
+        if hasattr(cl.context, 'request') and hasattr(cl.context.request, 'cookies'):
+            cookies = cl.context.request.cookies
+            logger.debug(f"Found cookies: {list(cookies.keys())}")
+            auth_cookie_names = ['session', 'auth', 'token', 'user', 'sid']
+            for name in auth_cookie_names:
+                if any(name in cookie_name.lower() for cookie_name in cookies):
+                    is_fallback_auth = True
+                    logger.debug(f"Found potential auth cookie: {name}")
+    except Exception as e:
+        logger.error(f"Error checking cookies: {e}")
+
+    # Authentication context with enhanced logging and fallbacks
     auth_token = query_dict.get('token', [None])[0]
-    user_id, is_authenticated, user_data = verify_auth_token(auth_token)
-    
+    logger.debug(f"Raw auth token: {auth_token[:20] if auth_token else 'None'}")
+
+    # Get direct user param
+    direct_user = query_dict.get('user', [None])[0]
+    logger.debug(f"Direct user param: {direct_user}")
+
+    # Extract username from referer header if present
+    parent_username = None
+    try:
+        if hasattr(cl.context, 'request') and hasattr(cl.context.request, 'headers'):
+            referer = cl.context.request.headers.get('referer', '')
+            if 'user=' in referer:
+                parent_username = referer.split('user=')[1].split('&')[0]
+                logger.debug(f"Found username in referer: {parent_username}")
+    except Exception as e:
+        logger.error(f"Error extracting username from referer: {e}")
+
+    # Prepare verification
+    username_candidates = [direct_user, parent_username]
+    username_candidates = [u for u in username_candidates if u]
+
+    user_id, is_authenticated, user_data = "guest", False, {}
+    # Verify token if present
+    if auth_token:
+        try:
+            user_id, is_authenticated, user_data = verify_auth_token(auth_token)
+        except Exception as e:
+            logger.error(f"Error verifying auth token: {e}")
+    # Fallback to username or cookie-based auth
+    if not is_authenticated and username_candidates:
+        user_id = username_candidates[0]
+        is_authenticated = True
+        user_data = {"username": user_id}
+        logger.debug(f"Using direct username as fallback: {user_id}")
+    elif not is_authenticated and is_fallback_auth:
+        user_id = "authenticated_user"
+        is_authenticated = True
+        user_data = {"username": "Valued Customer"}
+        logger.debug("Using cookie-based auth fallback")
+
     logger.debug(f"Authentication result: user_id={user_id}, authenticated={is_authenticated}")
     logger.debug(f"User data: {user_data}")
-    
+
     # Build enhanced context
     context = {
         "current_page": query_dict.get('tab', ['home'])[0],
@@ -1485,16 +1557,15 @@ async def start():
         "session_id": query_dict.get('session_id', [str(uuid.uuid4())])[0],
         "is_floating": query_dict.get('floating', ['false'])[0].lower() == 'true'
     }
-    
     # Check for active order
     order_id = query_dict.get('order_id', [None])[0]
     if order_id:
         context["active_order"] = {"id": order_id}
-    
+
     # Save to session
     cl.user_session.set("context", context)
     logger.debug(f"Saved context to session: {context}")
-    
+
     # Set up the agent
     try:
         agent = setup_langchain_agent(context)
@@ -1502,26 +1573,22 @@ async def start():
         logger.debug("Agent setup complete")
     except Exception as e:
         logger.error(f"Error setting up agent: {e}")
-    
+
     # Send personalized welcome
     try:
         welcome_msg = ""
         if is_authenticated and context.get('full_name'):
             welcome_msg = f"Welcome back, {context['full_name']}! How can I assist you today?"
-        elif is_authenticated and context.get('username'):
+        elif is_authenticated:
             welcome_msg = f"Welcome back, {context['username']}! How can I assist you today?"
         else:
             welcome_msg = "Welcome to Neo Cafe! How can I help you today?"
-        
-        # Add order context if available
         if order_id:
             welcome_msg += f"\n\nI see you have an active order (#{order_id}). Would you like to check its status?"
-        
         logger.debug(f"Sending welcome message: {welcome_msg}")
         await cl.Message(content=welcome_msg).send()
     except Exception as e:
         logger.error(f"Error sending welcome message: {e}")
-        # Fallback welcome
         await cl.Message(content="Welcome to Neo Cafe! How can I help you today?").send()
 
 @cl.on_window_message

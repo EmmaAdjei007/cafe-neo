@@ -86,8 +86,76 @@
             }
         }
         
-        debugLog('Initializing Chainlit embed');
+        // Extract token from URL for debugging
+        function extractAndLogToken() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const token = urlParams.get('token');
+            const user = urlParams.get('user');
+            
+            if (token) {
+                debugLog(`Token present in URL (first 20 chars): ${token.substring(0, 20)}...`);
+            } else {
+                debugLog('No token found in URL');
+            }
+            
+            if (user) {
+                debugLog(`User present in URL: ${user}`);
+            } else {
+                debugLog('No user param found in URL');
+            }
+            
+            // Add token to local storage for backup
+            if (token) {
+                localStorage.setItem('chainlit_auth_token', token);
+            }
+            if (user) {
+                localStorage.setItem('chainlit_user', user);
+            }
+        }
         
+        debugLog('Initializing Chainlit embed');
+        extractAndLogToken(); // Call this function right after the debugging code
+
+        // Add this right after the extractAndLogToken function
+        function addTokenToChildMessages() {
+            const iframe = document.getElementById('chatframe');
+            const urlParams = new URLSearchParams(window.location.search);
+            const token = urlParams.get('token');
+            const user = urlParams.get('user');
+            
+            if (!iframe || !iframe.contentWindow) return;
+            
+            // Create messaging interval - keeps trying to pass user info to the iframe
+            const messagingInterval = setInterval(() => {
+                try {
+                    // Send credentials to iframe
+                    let credentials = {};
+                    if (token) credentials.token = token;
+                    if (user) credentials.user = user;
+                    
+                    if (Object.keys(credentials).length > 0) {
+                        debugLog('Sending credentials to iframe');
+                        iframe.contentWindow.postMessage({
+                            type: 'auth_credentials',
+                            credentials: credentials
+                        }, '*');
+                        
+                        // Also try standard communication format
+                        iframe.contentWindow.postMessage({
+                            type: 'credentials',
+                            token: token,
+                            user: user
+                        }, '*');
+                    }
+                } catch (e) {
+                    debugLog('Error sending credentials to iframe:', e);
+                }
+            }, 2000); // Try every 2 seconds
+            
+            // Clear interval after 30 seconds (should be authenticated by then)
+            setTimeout(() => clearInterval(messagingInterval), 30000);
+        }
+
         // Check if we're in a floating context
         const isFloating = window.frameElement && 
                           (window.frameElement.id === 'floating-chainlit-frame');
@@ -213,6 +281,9 @@
             
             // Let the parent know we're ready
             window.parent.postMessage({type: 'iframe_ready'}, '*');
+            
+            // Start sending credentials to the iframe
+            addTokenToChildMessages();
             
             // Process any queued messages
             setTimeout(processMessageQueue, 1000);
