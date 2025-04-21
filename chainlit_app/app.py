@@ -38,8 +38,6 @@ logging.basicConfig(
 logger = logging.getLogger('neo_cafe')
 logger.setLevel(logging.DEBUG)
 
-# Add this after imports in both app.py and chainlit_app/app.py
-
 # Add parent directory to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -54,8 +52,33 @@ menu_items = []  # Will be populated in the create_knowledge_base function
 processed_message_ids = set()  # Track processed message IDs to avoid duplicates
 is_floating_chat = False  # Flag to check if running in floating mode
 
-# ----- Database Setup -----
+# Session store for persistent context
+PERSISTENT_SESSIONS = {}
 
+def get_persistent_session(session_id):
+    """
+    Get or create a persistent session that survives WebSocket reconnections
+    
+    Args:
+        session_id (str): Session identifier
+        
+    Returns:
+        dict: The persistent session data
+    """
+    if session_id not in PERSISTENT_SESSIONS:
+        PERSISTENT_SESSIONS[session_id] = {
+            "created_at": datetime.now().isoformat(),
+            "last_active": datetime.now().isoformat(),
+            "context": {},
+            "agent_initialized": False
+        }
+    else:
+        # Update last active timestamp
+        PERSISTENT_SESSIONS[session_id]["last_active"] = datetime.now().isoformat()
+        
+    return PERSISTENT_SESSIONS[session_id]
+
+# Database initialization
 def init_db():
     """Initialize database for conversation history and orders"""
     conn = sqlite3.connect(DB_PATH)
@@ -86,20 +109,15 @@ def init_db():
     conn.close()
     print("Database initialized successfully")
 
-# Initialize the database on module load
+# Initialize the database
 try:
     init_db()
 except Exception as e:
     print(f"Error initializing database: {e}")
 
-# ----- Knowledge Base Setup -----
-
+# Knowledge base setup
 def load_menu_data():
-    """
-    Load menu data from menu.json with robust error handling.
-    Returns:
-        list: Menu items.
-    """
+    """Load menu data from menu.json with robust error handling"""
     try:
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         possible_paths = [
@@ -128,11 +146,9 @@ def validate_menu_data(data: list):
     required = ['id', 'name', 'price', 'category']
     
     for item in data:
-        # Check required fields
         if not all(key in item for key in required):
             raise ValueError(f"Missing required field in item: {item}")
             
-        # Validate field types
         if not isinstance(item['price'], (int, float)):
             raise ValueError(f"Invalid price format in item: {item['id']}")
 
@@ -273,8 +289,147 @@ def create_knowledge_base():
         
         return SimpleRetriever()
 
-# ----- Order Management System -----
 
+# Order processing functions
+def parse_order_text(text):
+    """
+    Parse natural language order text into structured order data with improved matching.
+    Args:
+        text (str): Natural language order description.
+    Returns:
+        dict: Structured order data.
+    """
+    try:
+        context = cl.user_session.get("context", {})
+        order_items = []
+        special_instructions_global = ""
+        
+        # Extract items and quantities
+        text_lower = text.lower()
+        print(f"Parsing order text: {text_lower}")
+        
+        # Extract global special instructions
+        if "with " in text_lower and " and " in text_lower.split("with ")[1]:
+            parts = text_lower.split("with ")
+            special_parts = parts[1].split(" and ")
+            if len(special_parts) > 1:
+                special_instructions_global = f"With {parts[1]}"
+        
+        # Process each menu item
+        for item in menu_items:
+            item_name_lower = item["name"].lower()
+            
+            # Try different ways the item might appear in text
+            variations = [
+                item_name_lower,
+                item_name_lower.replace(" ", ""),  # No spaces
+                item_name_lower.replace("-", ""),  # No hyphens
+                item_name_lower.replace(" ", "-"),  # Spaces as hyphens
+                # Add common spelling variations if needed
+            ]
+            
+            found = False
+            for variation in variations:
+                if variation in text_lower:
+                    found = True
+                    break
+                    
+            if found:
+                # Try to find quantity before item name
+                quantity = 1
+                # Look for numeric quantities
+                item_index = text_lower.find(item_name_lower)
+                before_item = text_lower[:item_index].strip()
+                words_before = before_item.split()
+                
+                if words_before and words_before[-1].isdigit():
+                    quantity = int(words_before[-1])
+                else:
+                    # Look for written numbers
+                    number_words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, 
+                                    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+                    for word, value in number_words.items():
+                        if f"{word} {item_name_lower}" in text_lower:
+                            quantity = value
+                            break
+                
+                # Special instruction handling for this specific item
+                special_instructions = ""
+                item_pos = text_lower.find(item_name_lower)
+                if item_pos >= 0:
+                    after_item = text_lower[item_pos + len(item_name_lower):]
+                    if "with " in after_item:
+                        with_part = after_item.split("with ")[1].split(".")[0].split(",")[0]
+                        if len(with_part) < 100:  # Reasonable length check
+                            special_instructions = f"With {with_part}"
+                
+                order_items.append({
+                    "item_id": item["id"],
+                    "quantity": quantity,
+                    "special_instructions": special_instructions
+                })
+                print(f"Found item: {item['name']}, quantity: {quantity}")
+        
+        if not order_items:
+            # Try fuzzy matching for items
+            words = text_lower.split()
+            for word in words:
+                if len(word) > 3:  # Skip short words
+                    best_match = None
+                    best_score = 0
+                    
+                    for menu_item in menu_items:
+                        menu_name = menu_item["name"].lower()
+                        
+                        # Simple fuzzy matching
+                        if word in menu_name or any(word in part for part in menu_name.split()):
+                            score = len(word) / len(menu_name)  # Longer matches = better
+                            if score > best_score:
+                                best_score = score
+                                best_match = menu_item
+                    
+                    if best_match and best_score > 0.3:  # Threshold for match quality
+                        print(f"Fuzzy match: '{word}' -> '{best_match['name']}'")
+                        order_items.append({
+                            "item_id": best_match["id"],
+                            "quantity": 1,
+                            "special_instructions": ""
+                        })
+        
+        if not order_items:
+            raise ValueError("No menu items found in order text")
+            
+        # Determine delivery type
+        delivery_type = "table"
+        if "delivery" in text_lower:
+            delivery_type = "delivery"
+            
+        # Extract delivery details
+        delivery_details = ""
+        if "to table" in text_lower:
+            table_index = text_lower.find("to table")
+            if table_index != -1:
+                after_table = text_lower[table_index+8:].strip()
+                table_parts = after_table.split()
+                if table_parts and table_parts[0].isdigit():
+                    delivery_details = f"Table {table_parts[0]}"
+                elif len(table_parts) > 0:
+                    delivery_details = f"Table area: {' '.join(table_parts[:3])}"
+        
+        # Build the order structure
+        return {
+            "user_id": context.get("user_id", "guest"),
+            "items": order_items,
+            "delivery_type": delivery_type,
+            "delivery_details": delivery_details,
+            "special_instructions": special_instructions_global
+        }
+    except Exception as e:
+        print(f"Parse order error details: {e}")
+        raise ValueError(f"Could not parse order text: {str(e)}")
+
+
+# Order management class
 class OrderManager:
     @staticmethod
     def place_order(order_data):
@@ -723,8 +878,8 @@ class OrderManager:
             print(f"Error updating order: {e}")
             return {"error": str(e)}
 
-# ----- API Integration Tools -----
 
+# API integration tools
 def navigate_to_page(destination):
     """
     Send navigation request to the Dash app.
@@ -769,7 +924,7 @@ def navigate_to_page(destination):
     except Exception as e:
         print(f"Navigate error: {e}")
         return f"Failed to navigate: {str(e)}"
-    
+
 def list_menu_items(query:str = "") -> str:
     """List all available menu items for debugging."""
     if not menu_items:
@@ -982,7 +1137,6 @@ def search_menu(query):
         traceback.print_exc()
         return f"Error searching menu: {str(e)}"
 
-
 def get_store_hours():
     """Get store hours information."""
     return """
@@ -995,143 +1149,6 @@ Location: 123 Coffee Street, Downtown
 Phone: (555) 123-4567
 Email: info@neocafe.com
 """
-
-def parse_order_text(text):
-    """
-    Parse natural language order text into structured order data with improved matching.
-    Args:
-        text (str): Natural language order description.
-    Returns:
-        dict: Structured order data.
-    """
-    try:
-        context = cl.user_session.get("context", {})
-        order_items = []
-        special_instructions_global = ""
-        
-        # Extract items and quantities
-        text_lower = text.lower()
-        print(f"Parsing order text: {text_lower}")
-        
-        # Extract global special instructions
-        if "with " in text_lower and " and " in text_lower.split("with ")[1]:
-            parts = text_lower.split("with ")
-            special_parts = parts[1].split(" and ")
-            if len(special_parts) > 1:
-                special_instructions_global = f"With {parts[1]}"
-        
-        # Process each menu item
-        for item in menu_items:
-            item_name_lower = item["name"].lower()
-            
-            # Try different ways the item might appear in text
-            variations = [
-                item_name_lower,
-                item_name_lower.replace(" ", ""),  # No spaces
-                item_name_lower.replace("-", ""),  # No hyphens
-                item_name_lower.replace(" ", "-"),  # Spaces as hyphens
-                # Add common spelling variations if needed
-            ]
-            
-            found = False
-            for variation in variations:
-                if variation in text_lower:
-                    found = True
-                    break
-                    
-            if found:
-                # Try to find quantity before item name
-                quantity = 1
-                # Look for numeric quantities
-                item_index = text_lower.find(item_name_lower)
-                before_item = text_lower[:item_index].strip()
-                words_before = before_item.split()
-                
-                if words_before and words_before[-1].isdigit():
-                    quantity = int(words_before[-1])
-                else:
-                    # Look for written numbers
-                    number_words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, 
-                                    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
-                    for word, value in number_words.items():
-                        if f"{word} {item_name_lower}" in text_lower:
-                            quantity = value
-                            break
-                
-                # Special instruction handling for this specific item
-                special_instructions = ""
-                item_pos = text_lower.find(item_name_lower)
-                if item_pos >= 0:
-                    after_item = text_lower[item_pos + len(item_name_lower):]
-                    if "with " in after_item:
-                        with_part = after_item.split("with ")[1].split(".")[0].split(",")[0]
-                        if len(with_part) < 100:  # Reasonable length check
-                            special_instructions = f"With {with_part}"
-                
-                order_items.append({
-                    "item_id": item["id"],
-                    "quantity": quantity,
-                    "special_instructions": special_instructions
-                })
-                print(f"Found item: {item['name']}, quantity: {quantity}")
-        
-        if not order_items:
-            # Try fuzzy matching for items
-            words = text_lower.split()
-            for word in words:
-                if len(word) > 3:  # Skip short words
-                    best_match = None
-                    best_score = 0
-                    
-                    for menu_item in menu_items:
-                        menu_name = menu_item["name"].lower()
-                        
-                        # Simple fuzzy matching
-                        if word in menu_name or any(word in part for part in menu_name.split()):
-                            score = len(word) / len(menu_name)  # Longer matches = better
-                            if score > best_score:
-                                best_score = score
-                                best_match = menu_item
-                    
-                    if best_match and best_score > 0.3:  # Threshold for match quality
-                        print(f"Fuzzy match: '{word}' -> '{best_match['name']}'")
-                        order_items.append({
-                            "item_id": best_match["id"],
-                            "quantity": 1,
-                            "special_instructions": ""
-                        })
-        
-        if not order_items:
-            raise ValueError("No menu items found in order text")
-            
-        # Determine delivery type
-        delivery_type = "table"
-        if "delivery" in text_lower:
-            delivery_type = "delivery"
-            
-        # Extract delivery details
-        delivery_details = ""
-        if "to table" in text_lower:
-            table_index = text_lower.find("to table")
-            if table_index != -1:
-                after_table = text_lower[table_index+8:].strip()
-                table_parts = after_table.split()
-                if table_parts and table_parts[0].isdigit():
-                    delivery_details = f"Table {table_parts[0]}"
-                elif len(table_parts) > 0:
-                    delivery_details = f"Table area: {' '.join(table_parts[:3])}"
-        
-        # Build the order structure
-        return {
-            "user_id": context.get("user_id", "guest"),
-            "items": order_items,
-            "delivery_type": delivery_type,
-            "delivery_details": delivery_details,
-            "special_instructions": special_instructions_global
-        }
-    except Exception as e:
-        print(f"Parse order error details: {e}")
-        raise ValueError(f"Could not parse order text: {str(e)}")
 
 def query_knowledge_base(query):
     """
@@ -1159,8 +1176,8 @@ def query_knowledge_base(query):
         print(f"Knowledge base error: {e}")
         return "Sorry, I encountered an error when searching our information database."
 
-# ----- Authentication and User Management -----
 
+# Authentication and user management
 def verify_auth_token(token):
     """
     Verify authentication token with enhanced debugging
@@ -1284,22 +1301,51 @@ def save_conversation_message(session_id, content, is_user=False):
     except Exception as e:
         print(f"Error saving conversation message: {e}")
 
-# ----- LangChain Agent Setup -----
-
-# Update the setup_langchain_agent function in chainlit_app/app.py
-
-def setup_langchain_agent(context):
+def save_conversation_message(session_id, content, is_user=False):
     """
-    Set up LangChain agent with tools for interacting with Neo Cafe.
+    Save a conversation message to the database.
     Args:
-        context (dict): Session context.
-    Returns:
-        object: Initialized LangChain agent.
+        session_id (str): Session identifier.
+        content (str): Message content.
+        is_user (bool): Whether the message is from the user.
     """
     try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute('''INSERT INTO messages
+                     (session_id, content, is_user, timestamp)
+                     VALUES (?, ?, ?, ?)''',
+                  (session_id, content, is_user, datetime.now()))
+        
+        # Update session last active timestamp
+        c.execute('''UPDATE conversations
+                     SET last_active = ?
+                     WHERE session_id = ?''',
+                  (datetime.now(), session_id))
+        
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error saving conversation message: {e}")
+
+# Agent setup
+def initialize_agent_safely(context):
+    """
+    Initialize the LangChain agent with better error handling
+    
+    Args:
+        context (dict): The user session context
+        
+    Returns:
+        object or None: The initialized agent or None if initialization failed
+    """
+    try:
+        logger.debug("Starting agent initialization")
+        
         # Create knowledge base
         vector_store = create_knowledge_base()
         cl.user_session.set("vector_store", vector_store)
+        logger.debug("Knowledge base created successfully")
         
         # Initialize memory
         memory = ConversationBufferMemory(
@@ -1315,6 +1361,7 @@ def setup_langchain_agent(context):
                     memory.chat_memory.add_user_message(msg["content"])
                 else:
                     memory.chat_memory.add_ai_message(msg["content"])
+            logger.debug(f"Loaded {len(history)} messages from history")
         
         # Define tools
         tools = [
@@ -1322,11 +1369,6 @@ def setup_langchain_agent(context):
                 name="NavigateTool",
                 func=navigate_to_page,
                 description="Navigate to a page in the Neo Cafe app. Valid destinations are: menu, orders, delivery, profile, dashboard"
-            ),
-            Tool(
-                name="ListMenuTool",
-                func=lambda _: list_menu_items(),
-                description="List all available menu items"
             ),
             Tool(
                 name="SearchMenuTool",
@@ -1344,11 +1386,6 @@ def setup_langchain_agent(context):
                 description="Check the status of an order by order ID"
             ),
             Tool(
-                name="UpdateOrderTool",
-                func=lambda x: OrderManager.update_order(*json.loads(x)),
-                description="Update an existing order. Format: JSON string with order_id and updates object"
-            ),
-            Tool(
                 name="StoreHoursTool",
                 func=get_store_hours,
                 description="Get information about Neo Cafe's operating hours and location"
@@ -1359,6 +1396,7 @@ def setup_langchain_agent(context):
                 description="Search Neo Cafe's knowledge base for general information"
             )
         ]
+        logger.debug(f"Created {len(tools)} tools for the agent")
         
         # Create personalized system message
         is_auth = context.get("is_authenticated", False)
@@ -1391,35 +1429,51 @@ IMPORTANT GUIDELINES:
 
 If in floating chat mode, keep responses brief and focused."""
         
-        # Define custom prefix using system_message
-        custom_prefix = system_message
+        # Initialize LLM with error handling
+        try:
+            llm = ChatOpenAI(temperature=0.7, model="gpt-4o")
+            logger.debug("LLM initialized successfully")
+        except Exception as llm_err:
+            logger.error(f"Error initializing LLM: {llm_err}")
+            # Fallback to older model or simpler configuration
+            try:
+                llm = ChatOpenAI(temperature=0.7, model="gpt-3.5-turbo")
+                logger.debug("Fallback LLM initialized")
+            except Exception as fallback_err:
+                logger.error(f"Fallback LLM also failed: {fallback_err}")
+                return None
         
-        # Initialize LLM
-        llm = ChatOpenAI(temperature=0.7, model="gpt-4o")
-        memory = ConversationBufferMemory(
-            memory_key="chat_history",
-            return_messages=True,
-            ai_prefix="BaristaBot"
-        )
-        
-        agent = initialize_agent(
-            tools,
-            llm,
-            agent=AgentType.CONVERSATIONAL_REACT_DESCRIPTION,
-            verbose=True,
-            memory=memory,
-            handle_parsing_errors=True,
-            agent_kwargs={
-                'prefix': custom_prefix,
-                'system_message': SystemMessage(content=system_message)
-            }
-        )
-        return agent
+        # Try to initialize agent
+        try:
+            agent = initialize_agent(
+                tools,
+                llm,
+                agent=AgentType.CONVERSATIONAL_REACT_DESCRIPTION,
+                verbose=True,
+                memory=memory,
+                handle_parsing_errors=True,
+                agent_kwargs={
+                    'prefix': system_message,
+                    'system_message': SystemMessage(content=system_message)
+                }
+            )
+            logger.debug("Agent initialized successfully")
+            return agent
+        except Exception as agent_err:
+            logger.error(f"Error initializing agent: {agent_err}")
+            return None
+            
     except Exception as e:
-        print(f"Error setting up agent: {e}")
-        raise
+        logger.error(f"Unexpected error in agent initialization: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return None
 
-# Add this new function to generate personalized welcome messages
+def setup_langchain_agent(context):
+    """Set up LangChain agent with tools"""
+    # ... alternative agent setup
+
+# Helper functions
 def get_personalized_welcome(context):
     """Generate a personalized welcome message based on user context"""
     # Base greeting with personalization if authenticated
@@ -1449,147 +1503,215 @@ def get_personalized_welcome(context):
     
     return greeting + page_specific + order_content
 
-# ----- Chainlit Handlers -----
+
+# Chainlit handlers
 @cl.on_chat_start
 async def start():
-    """Initialize chat session with detailed logging"""
-    # Get URL query parameters safely - with better error handling
+    """Initialize chat session with persistent session storage"""
     try:
+        # Generate a stable session ID based on user info or create a new one
+        session_id = None
+        
+        # Try to get session_id from query parameters first
         url_query = ""
-        # First try the new way (safer)
-        if hasattr(cl.context, 'request') and hasattr(cl.context.request, 'query_string'):
-            url_query = cl.context.request.query_string.decode('utf-8')
-            logger.debug(f"URL query from request: {url_query}")
-        # Fallback to session dict (may cause the error)
-        elif hasattr(cl.context, 'session') and isinstance(cl.context.session, dict):
-            url_query = cl.context.session.get('url_query', '')
-            logger.debug(f"URL query from session dict: {url_query}")
-        # Final fallback in case session is an object with get method
-        elif hasattr(cl.context, 'session') and hasattr(cl.context.session, 'get'):
-            try:
-                # Try with one argument to avoid signature mismatch
-                url_query = cl.context.session.get('url_query')
-                logger.debug(f"URL query from session object (1 arg): {url_query}")
-            except TypeError:
-                logger.debug("Session.get() caused TypeError, trying alternate access")
-                if hasattr(cl.context.session, '__dict__'):
-                    url_query = cl.context.session.__dict__.get('url_query', '')
-                    logger.debug(f"URL query from session.__dict__: {url_query}")
-        logger.debug(f"Final URL query: {url_query}")
-
+        try:
+            if hasattr(cl.context, 'request') and hasattr(cl.context.request, 'query_string'):
+                url_query = cl.context.request.query_string.decode('utf-8')
+            elif hasattr(cl.context, 'session') and isinstance(cl.context.session, dict):
+                url_query = cl.context.session.get('url_query', '')
+            elif hasattr(cl.context, 'session') and hasattr(cl.context.session, 'get'):
+                try:
+                    url_query = cl.context.session.get('url_query')
+                except TypeError:
+                    if hasattr(cl.context.session, '__dict__'):
+                        url_query = cl.context.session.__dict__.get('url_query', '')
+        except Exception as e:
+            logger.error(f"Error parsing URL query: {e}")
+            url_query = ""
+        
         query_dict = {}
         if url_query:
             query_dict = urllib.parse.parse_qs(url_query)
-        logger.debug(f"Parsed query dict: {query_dict}")
-    except Exception as e:
-        logger.error(f"Error parsing URL query: {e}")
-        query_dict = {}
-
-    # Add a fallback for detecting login status via cookies
-    is_fallback_auth = False
-    try:
-        if hasattr(cl.context, 'request') and hasattr(cl.context.request, 'cookies'):
-            cookies = cl.context.request.cookies
-            logger.debug(f"Found cookies: {list(cookies.keys())}")
-            auth_cookie_names = ['session', 'auth', 'token', 'user', 'sid']
-            for name in auth_cookie_names:
-                if any(name in cookie_name.lower() for cookie_name in cookies):
-                    is_fallback_auth = True
-                    logger.debug(f"Found potential auth cookie: {name}")
-    except Exception as e:
-        logger.error(f"Error checking cookies: {e}")
-
-    # Authentication context with enhanced logging and fallbacks
-    auth_token = query_dict.get('token', [None])[0]
-    logger.debug(f"Raw auth token: {auth_token[:20] if auth_token else 'None'}")
-
-    # Get direct user param
-    direct_user = query_dict.get('user', [None])[0]
-    logger.debug(f"Direct user param: {direct_user}")
-
-    # Extract username from referer header if present
-    parent_username = None
-    try:
-        if hasattr(cl.context, 'request') and hasattr(cl.context.request, 'headers'):
-            referer = cl.context.request.headers.get('referer', '')
-            if 'user=' in referer:
-                parent_username = referer.split('user=')[1].split('&')[0]
-                logger.debug(f"Found username in referer: {parent_username}")
-    except Exception as e:
-        logger.error(f"Error extracting username from referer: {e}")
-
-    # Prepare verification
-    username_candidates = [direct_user, parent_username]
-    username_candidates = [u for u in username_candidates if u]
-
-    user_id, is_authenticated, user_data = "guest", False, {}
-    # Verify token if present
-    if auth_token:
+            
+        # First check if there's a session_id in the query
+        if 'session_id' in query_dict:
+            session_id = query_dict.get('session_id', [None])[0]
+            logger.debug(f"Found session_id in URL: {session_id}")
+            
+        # If no session_id was found, try to generate a stable one based on user if available
+        if not session_id:
+            # Get user info
+            user = query_dict.get('user', [None])[0]
+            token = query_dict.get('token', [None])[0]
+            
+            if user:
+                # Create a stable session ID based on username
+                import hashlib
+                session_id = f"user-{hashlib.md5(user.encode()).hexdigest()[:12]}"
+                logger.debug(f"Generated stable session_id from user: {session_id}")
+            else:
+                # Still no session ID, generate a random one
+                session_id = str(uuid.uuid4())
+                logger.debug(f"Generated random session_id: {session_id}")
+        
+        # Get or create persistent session
+        persistent_session = get_persistent_session(session_id)
+        saved_context = persistent_session.get("context", {})
+        
+        # Initialize new context with basic info
+        context = {
+            "session_id": session_id,
+            "user_id": "guest",
+            "username": "guest",
+            "email": "",
+            "first_name": "",
+            "last_name": "",
+            "full_name": "",
+            "is_authenticated": False,
+        }
+        
+        # Add page info from URL
+        context["current_page"] = query_dict.get('tab', ['home'])[0]
+        context["is_floating"] = query_dict.get('floating', ['false'])[0].lower() == 'true'
+        
+        # Get cached auth info if available
+        if saved_context.get("is_authenticated", False):
+            context.update({
+                "user_id": saved_context.get("user_id", "guest"),
+                "username": saved_context.get("username", "guest"),
+                "email": saved_context.get("email", ""),
+                "first_name": saved_context.get("first_name", ""),
+                "last_name": saved_context.get("last_name", ""),
+                "full_name": saved_context.get("full_name", ""),
+                "is_authenticated": True
+            })
+            logger.debug(f"Restored auth info from persistent session")
+        
+        # Process auth token if present
+        auth_token = query_dict.get('token', [None])[0]
+        direct_user = query_dict.get('user', [None])[0]
+        
+        if auth_token and direct_user:
+            try:
+                # Decode token
+                import base64
+                import json
+                
+                try:
+                    # Add padding if needed
+                    missing_padding = len(auth_token) % 4
+                    if missing_padding:
+                        auth_token += '=' * (4 - missing_padding)
+                        
+                    decoded_bytes = base64.b64decode(auth_token)
+                    user_data = json.loads(decoded_bytes)
+                    
+                    if isinstance(user_data, dict) and user_data.get('username') == direct_user:
+                        # Update auth info
+                        context.update({
+                            "user_id": direct_user,
+                            "username": direct_user,
+                            "email": user_data.get("email", ""),
+                            "first_name": user_data.get("first_name", ""),
+                            "last_name": user_data.get("last_name", ""),
+                            "is_authenticated": True
+                        })
+                        
+                        # Add full name
+                        first_name = user_data.get("first_name", "")
+                        last_name = user_data.get("last_name", "")
+                        if first_name or last_name:
+                            full_name = f"{first_name} {last_name}".strip()
+                            context["full_name"] = full_name
+                        
+                        logger.debug(f"Updated context from token")
+                except Exception as decode_err:
+                    logger.error(f"Error decoding token: {decode_err}")
+            except Exception as e:
+                logger.error(f"Error processing auth token: {e}")
+        
+        # Save context to persistent session and user session
+        persistent_session["context"] = context
+        cl.user_session.set("context", context)
+        logger.debug(f"Saved context to sessions: {context}")
+        
+        # Check if agent is already initialized in persistent session
+        agent = None
+        if persistent_session.get("agent_initialized", False):
+            logger.debug("Agent already initialized in persistent session")
+            # Get it from user session if available (agents can't be stored in dict)
+            agent = cl.user_session.get("agent")
+        
+        # Initialize agent if needed
+        if not agent:
+            logger.debug("Initializing new agent")
+            agent = initialize_agent_safely(context)
+            if agent:
+                cl.user_session.set("agent", agent)
+                persistent_session["agent_initialized"] = True
+                logger.debug("Agent initialized successfully")
+            else:
+                logger.warning("Agent initialization failed")
+        
+        # Always make sure context has the session_id
+        context = cl.user_session.get("context", {})
+        if "session_id" not in context or not context["session_id"]:
+            context["session_id"] = session_id
+            cl.user_session.set("context", context)
+            persistent_session["context"] = context
+        
+        # Send personalized welcome message
         try:
-            user_id, is_authenticated, user_data = verify_auth_token(auth_token)
-        except Exception as e:
-            logger.error(f"Error verifying auth token: {e}")
-    # Fallback to username or cookie-based auth
-    if not is_authenticated and username_candidates:
-        user_id = username_candidates[0]
-        is_authenticated = True
-        user_data = {"username": user_id}
-        logger.debug(f"Using direct username as fallback: {user_id}")
-    elif not is_authenticated and is_fallback_auth:
-        user_id = "authenticated_user"
-        is_authenticated = True
-        user_data = {"username": "Valued Customer"}
-        logger.debug("Using cookie-based auth fallback")
-
-    logger.debug(f"Authentication result: user_id={user_id}, authenticated={is_authenticated}")
-    logger.debug(f"User data: {user_data}")
-
-    # Build enhanced context
-    context = {
-        "current_page": query_dict.get('tab', ['home'])[0],
-        "user_id": user_id,
-        "username": user_data.get('username', user_id),
-        "email": user_data.get('email', ''),
-        "first_name": user_data.get('first_name', ''),
-        "last_name": user_data.get('last_name', ''),
-        "full_name": user_data.get('full_name', ''),
-        "is_authenticated": is_authenticated,
-        "session_id": query_dict.get('session_id', [str(uuid.uuid4())])[0],
-        "is_floating": query_dict.get('floating', ['false'])[0].lower() == 'true'
-    }
-    # Check for active order
-    order_id = query_dict.get('order_id', [None])[0]
-    if order_id:
-        context["active_order"] = {"id": order_id}
-
-    # Save to session
-    cl.user_session.set("context", context)
-    logger.debug(f"Saved context to session: {context}")
-
-    # Set up the agent
-    try:
-        agent = setup_langchain_agent(context)
-        cl.user_session.set("agent", agent)
-        logger.debug("Agent setup complete")
+            if context.get('is_authenticated', False):
+                display_name = context.get('full_name') or context.get('username', 'there')
+                welcome_msg = f"Welcome, {display_name}! How can I assist you today?"
+            else:
+                welcome_msg = "Welcome to Neo Cafe! How can I help you today?"
+                
+            # If there's an active order, mention it
+            if 'active_order' in context:
+                order_id = context['active_order'].get('id', 'Unknown')
+                welcome_msg += f"\n\nI see you have an active order (#{order_id}). Would you like to check its status?"
+                
+            await cl.Message(content=welcome_msg).send()
+            
+            # Let the parent window know the chat is ready
+            try:
+                cl.send_to_parent({
+                    "type": "chat_ready",
+                    "session_id": session_id
+                })
+            except:
+                pass
+                
+        except Exception as msg_err:
+            logger.error(f"Error sending welcome message: {msg_err}")
+            await cl.Message(content="Welcome to Neo Cafe! How can I help you today?").send()
+            
     except Exception as e:
-        logger.error(f"Error setting up agent: {e}")
+        logger.error(f"Error in chat initialization: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        await cl.Message(content="Welcome to Neo Cafe! I'm experiencing some technical difficulties, but I'll do my best to assist you.").send()
 
-    # Send personalized welcome
+
+@cl.on_message
+async def on_message(message: cl.Message):
+    """Process messages with improved error handling"""
     try:
-        welcome_msg = ""
-        if is_authenticated and context.get('full_name'):
-            welcome_msg = f"Welcome back, {context['full_name']}! How can I assist you today?"
-        elif is_authenticated:
-            welcome_msg = f"Welcome back, {context['username']}! How can I assist you today?"
-        else:
-            welcome_msg = "Welcome to Neo Cafe! How can I help you today?"
-        if order_id:
-            welcome_msg += f"\n\nI see you have an active order (#{order_id}). Would you like to check its status?"
-        logger.debug(f"Sending welcome message: {welcome_msg}")
-        await cl.Message(content=welcome_msg).send()
+        # Process through centralized message handler
+        await process_message(
+            message=message.content,
+            message_id=f"chat_{message.id}",
+            source="chat"
+        )
     except Exception as e:
-        logger.error(f"Error sending welcome message: {e}")
-        await cl.Message(content="Welcome to Neo Cafe! How can I help you today?").send()
+        print(f"Error in on_message: {e}")
+        import traceback
+        traceback.print_exc()
+        error_response = f"I apologize, but I'm having trouble responding right now. Please try again in a moment."
+        track_message(error_response, is_user=False)
+        await cl.Message(content=error_response).send()
 
 @cl.on_window_message
 async def handle_window_message(message):
@@ -1621,7 +1743,8 @@ async def handle_window_message(message):
 
 async def process_message(message, message_id=None, source=None):
     """
-    Process a user message and generate a response using the LangChain agent.
+    Process a user message and generate a response with improved error handling
+    
     Args:
         message (str): The user's input message.
         message_id (str, optional): Unique identifier for the message.
@@ -1637,10 +1760,31 @@ async def process_message(message, message_id=None, source=None):
         return
     processed_message_ids.add(message_id)
 
+    # First, track the user message
+    track_message(message, is_user=True)
+    
+    # Get the agent, if available
     agent = cl.user_session.get("agent")
+    
+    # If agent is not available, try to reinitialize it
     if not agent:
-        await cl.Message(content="I'm still initializing. Please try again in a moment.").send()
-        return
+        print("Agent not available, attempting to initialize")
+        agent = initialize_agent_safely(context)
+        if agent:
+            cl.user_session.set("agent", agent)
+            print("Agent successfully reinitialized")
+        else:
+            print("Could not initialize agent, using fallback response")
+            await cl.Message(content="I'm having trouble connecting to my knowledge base. Let me try to answer your question more directly.").send()
+            
+            # Provide a simple fallback response
+            if "menu" in message.lower() or "order" in message.lower():
+                await cl.Message(content="I can help with our menu and orders. You can check out our coffee, pastries, and other items. Would you like more specific information?").send()
+            elif "hour" in message.lower() or "open" in message.lower():
+                await cl.Message(content="Neo Cafe is open Monday-Friday from 7am to 8pm, and Saturday-Sunday from 8am to 6pm.").send()
+            else:
+                await cl.Message(content="I'm still initializing my systems. Please try again in a moment, or you can navigate to our menu page to see what we offer.").send()
+            return
 
     try:
         # Build chat history from memory
@@ -1659,9 +1803,34 @@ async def process_message(message, message_id=None, source=None):
         )
         
         print(f"Processing message with prompt:\n{prompt}")
-        response = await cl.make_async(agent.run)(prompt)
-        await cl.Message(content=response).send()
         
+        # Add a timeout for agent.run to prevent hanging
+        from concurrent.futures import TimeoutError
+        import asyncio
+        
+        try:
+            # Try to get a response with a timeout
+            response = await asyncio.wait_for(
+                cl.make_async(agent.run)(prompt),
+                timeout=30  # 30 second timeout
+            )
+            
+            # Track and send the response
+            track_message(response, is_user=False)
+            await cl.Message(content=response).send()
+            
+        except TimeoutError:
+            print("Agent response timed out")
+            await cl.Message(content="I'm taking longer than expected to process your request. Let me provide a simpler response.").send()
+            
+            # Provide a fallback response for timeout
+            if "menu" in message.lower():
+                await cl.Message(content="Our menu includes various coffee drinks, teas, and pastries. You can view the full menu on our menu page.").send()
+            elif "order" in message.lower():
+                await cl.Message(content="You can place an order by telling me what items you'd like, or by using our menu page to select items.").send()
+            else:
+                await cl.Message(content="I'm here to help with orders, menu information, and general inquiries about Neo Cafe. How can I assist you?").send()
+            
         # Log updated conversation memory
         print("Updated conversation memory:")
         for msg in memory.buffer:
@@ -1669,82 +1838,99 @@ async def process_message(message, message_id=None, source=None):
             
     except Exception as e:
         print(f"Error processing message: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        track_message("I'm having trouble processing your request. Could you try rephrasing?", is_user=False)
         await cl.Message(
             content="I'm having trouble processing your request. Could you try rephrasing?"
         ).send()
 
-
 @cl.on_chat_end
 def on_chat_end():
-    """Save conversation history when chat ends"""
-    context = cl.user_session.get("context", {})
-    if not context:
-        return
-    messages = cl.user_session.get("chat_history", [])
-    
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    
-    # Update session
-    c.execute('''INSERT OR REPLACE INTO conversations
-                 (session_id, user_id, created_at, last_active)
-                 VALUES (?, ?, ?, ?)''',
-              (context['session_id'], context['user_id'],
-               datetime.now(), datetime.now()))
-    
-    # Save messages
-    for msg in messages:
-        c.execute('''INSERT INTO messages
-                     (session_id, content, is_user, timestamp)
-                     VALUES (?, ?, ?, ?)''',
-                  (context['session_id'], msg['content'],
-                   msg['is_user'], datetime.now()))
-    
-    conn.commit()
-    conn.close()
-
-
-@cl.on_message
-async def on_message(message: cl.Message):
-    """Process messages with full context handling"""
-    # Track user message first
-    track_message(message.content, is_user=True)
-    
+    """
+    Save conversation history when chat ends with improved error handling
+    and persistent session support
+    """
     try:
-        # Process through centralized message handler
-        response = await process_message(
-            message=message.content,
-            message_id=f"chat_{message.id}",
-            source="chat"
-        )
+        # Get context from both user session and persistent storage for redundancy
+        context = cl.user_session.get("context", {})
+        session_id = context.get('session_id')
         
-        # Only send and track if we got a response
-        if response:
-            track_message(response, is_user=False)
-            await cl.Message(content=response).send()
+        # If no session ID in context, try to find it from persistent sessions
+        if not session_id:
+            # Check if we have user info that can help us find the session
+            username = context.get('username')
+            if username and username != 'guest':
+                # Look for matching session in persistent sessions
+                for sid, session_data in PERSISTENT_SESSIONS.items():
+                    if session_data.get('context', {}).get('username') == username:
+                        session_id = sid
+                        logger.debug(f"Found session_id {session_id} for user {username} in persistent sessions")
+                        break
+        
+        # If still no session ID, generate one
+        if not session_id:
+            session_id = str(uuid.uuid4())
+            logger.warning(f"No session_id in context during on_chat_end, generated: {session_id}")
+        
+        # Get user_id from context or default to guest
+        user_id = context.get('user_id', 'guest')
+        
+        # Get messages from session - don't use get_message which can fail
+        messages = []
+        try:
+            messages = cl.user_session.get("chat_history", [])
+        except Exception as msg_err:
+            logger.error(f"Error getting chat history: {msg_err}")
+            
+        # Connect to database
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            
+            # Update session info - use INSERT OR REPLACE to handle both new and existing sessions
+            c.execute('''INSERT OR REPLACE INTO conversations
+                        (session_id, user_id, created_at, last_active)
+                        VALUES (?, ?, ?, ?)''',
+                    (session_id, user_id,
+                    datetime.now(), datetime.now()))
+            
+            # Save messages if we have any
+            if messages:
+                for msg in messages:
+                    try:
+                        c.execute('''INSERT INTO messages
+                                    (session_id, content, is_user, timestamp)
+                                    VALUES (?, ?, ?, ?)''',
+                                (session_id, msg.get('content', ''),
+                                msg.get('is_user', False), datetime.now()))
+                    except Exception as insert_err:
+                        logger.error(f"Error inserting message: {insert_err}")
+            
+            conn.commit()
+            conn.close()
+            logger.debug(f"Chat session {session_id} saved successfully")
+        except Exception as db_err:
+            logger.error(f"Database error in on_chat_end: {db_err}")
+            
+        # Update persistent session if available
+        try:
+            if session_id in PERSISTENT_SESSIONS:
+                persistent_session = PERSISTENT_SESSIONS[session_id]
+                persistent_session["last_active"] = datetime.now().isoformat()
+                logger.debug(f"Updated persistent session last_active timestamp")
+        except Exception as ps_err:
+            logger.error(f"Error updating persistent session in on_chat_end: {ps_err}")
             
     except Exception as e:
-        error_response = f"Sorry, I need help with that: {str(e)}"
-        track_message(error_response, is_user=False)
-        await cl.Message(content=error_response).send()
+        logger.error(f"Error in on_chat_end: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
 
-# ----- Enhanced Features -----
 
-def load_conversation_history(session_id: str) -> list:
-    """Load previous conversation from database"""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''SELECT content, is_user FROM messages
-                 WHERE session_id = ?
-                 ORDER BY timestamp ASC''', (session_id,))
-    results = c.fetchall()
-    conn.close()
-    
-    return [{
-        "content": row[0],
-        "is_user": bool(row[1])
-    } for row in results]
 
+# Enhanced features
 def track_message(content: str, is_user: bool):
     """Store messages in session history"""
     history = cl.user_session.get("chat_history", [])
@@ -1769,67 +1955,7 @@ def get_welcome_message(context: dict) -> str:
     }
     return base + page_specific.get(context['current_page'], "How can I assist you today?")
 
-# ----- Data Management -----
-
-def load_menu_data():
-    """Load menu with enhanced validation"""
-    try:
-        base_dir = os.path.dirname(os.path.dirname(__file__))
-        possible_paths = [
-            os.path.join(base_dir, 'data', 'menu.json'),
-            os.path.join(base_dir, 'app', 'data', 'menu.json')
-        ]
-        
-        for path in possible_paths:
-            if os.path.exists(path):
-                with open(path) as f:
-                    data = json.load(f)
-                    validate_menu_data(data)
-                    return data
-        return default_menu()
-    except Exception as e:
-        print(f"Menu error: {e}")
-        return default_menu()
-
-def validate_menu_data(data: list):
-    """Updated validation for menu items"""
-    required = ['id', 'name', 'price', 'category']
-    optional = ['description', 'vegetarian', 'vegan', 'gluten_free', 'popular']
-    
-    for item in data:
-        # Check required fields
-        if not all(key in item for key in required):
-            raise ValueError(f"Missing required field in item: {item}")
-            
-        # Validate field types
-        if not isinstance(item['price'], (int, float)):
-            raise ValueError(f"Invalid price format in item: {item['id']}")
-
-def default_menu():
-    """Updated default menu with all required fields"""
-    return [
-        {
-            "id": 1,
-            "name": "Espresso",
-            "description": "Rich espresso blend",
-            "price": 2.95,
-            "category": "coffee",
-            "vegetarian": True,
-            "vegan": False,
-            "gluten_free": True
-        },
-        {
-            "id": 2,
-            "name": "Croissant",
-            "description": "Buttery pastry",
-            "price": 3.25,
-            "category": "pastries",
-            "vegetarian": True,
-            "vegan": False,
-            "gluten_free": False
-        }
-    ]
-
+# UI starters
 @cl.set_starters
 async def set_starters():
     return [

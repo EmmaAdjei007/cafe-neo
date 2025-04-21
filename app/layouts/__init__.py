@@ -22,6 +22,9 @@ def create_main_layout():
         dcc.Store(id='auth-store', storage_type='session'),
         dcc.Store(id='chat-state-store', storage_type='session'),  # Add chat state
         dcc.Store(id='chat-auth-update', storage_type='memory'),
+        # Add the following new elements:
+        dcc.Store(id='chat-auth-trigger', storage_type='memory'),
+        html.Div(id='auth-status-listener', style={'display': 'none'}),
     ]
 
     # Define an interval for periodic updates
@@ -141,6 +144,7 @@ def register_order_update_callback(app):
     )
 
     # Chat-auth listener: updates iframe auth whenever user-store changes
+    # Register clientside callbacks
     app.clientside_callback(
         """
         function(userData) {
@@ -148,5 +152,6 @@ def register_order_update_callback(app):
         }
         """,
         Output("chat-auth-update", "className"),
-        [Input("user-store", "data")]
+        [Input("user-store", "data")],
+        prevent_initial_call=True
     )

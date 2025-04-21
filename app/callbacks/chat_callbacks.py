@@ -145,6 +145,54 @@ def register_callbacks(app, socketio):
     # Set Chainlit iframe source when panel becomes visible
     # Fix for authentication passing in app/callbacks/chat_callbacks.py
         # Find this function and replace it with the below:
+
+    @app.callback(
+    Output('chat-auth-trigger', 'data'),
+    [Input('user-store', 'data')],
+    prevent_initial_call=True
+)
+    def send_auth_to_chainlit(user_data):
+        """
+        Send authentication data to the Chainlit iframe
+        when user data changes (like after login)
+        """
+        if not user_data:
+            return dash.no_update
+        
+        # Only send auth update if we have a username
+        if 'username' in user_data:
+            try:
+                # Try to emit via socket.io
+                if hasattr(app, 'socketio'):
+                    auth_data = {
+                        'type': 'auth_update',
+                        'user': user_data['username'],
+                        'user_id': user_data.get('id', ''),
+                        'auth_status': True
+                    }
+                    
+                    # Create a token
+                    token_data = {
+                        'username': user_data['username'],
+                        'id': user_data.get('id', ''),
+                        'email': user_data.get('email', ''),
+                        'first_name': user_data.get('first_name', ''),
+                        'last_name': user_data.get('last_name', '')
+                    }
+                    
+                    import base64
+                    auth_data['token'] = base64.b64encode(json.dumps(token_data).encode()).decode()
+                    
+                    app.socketio.emit('auth_update', auth_data)
+                    print(f"Auth update sent via socket.io for user: {user_data['username']}")
+                
+                return {'username': user_data['username'], 'timestamp': time.time()}
+            except Exception as e:
+                print(f"Error sending auth to Chainlit: {e}")
+        
+        return dash.no_update    
+
+
     @app.callback(
     Output('floating-chainlit-frame', 'src'),
     [
@@ -153,45 +201,19 @@ def register_callbacks(app, socketio):
     ],
     [State('user-store', 'data'), 
      State('floating-chainlit-frame', 'src')]
-)
+    )
     def update_floating_chat_frame(panel_style, pathname, user_data, current_src):
         """Update the Chainlit iframe source with correct parameters"""
         ctx = callback_context
         trigger = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
         
-        # Only update if panel is being shown for the first time or we've changed pages
+        # Skip update if panel is hidden
         if not panel_style or panel_style.get("display") == "none":
             if trigger == 'url':
                 return dash.no_update  # Don't update on page change if panel is hidden
-                
-        # If we already have a URL and this is a page navigation, keep most parameters
-        if current_src and trigger == 'url' and '/?' in current_src:  # More specific check for parameters
-            parts = urllib.parse.urlparse(current_src)
-            query_params = dict(urllib.parse.parse_qsl(parts.query))
             
-            # Only update the tab parameter based on the new pathname
-            if pathname == '/menu':
-                query_params['tab'] = 'menu'
-            elif pathname == '/orders':
-                query_params['tab'] = 'order'
-            elif pathname == '/delivery':
-                query_params['tab'] = 'status'
-            elif pathname == '/dashboard':
-                query_params['tab'] = 'dashboard'
-            elif pathname == '/profile':
-                query_params['tab'] = 'profile'
-            else:
-                query_params['tab'] = 'home'
-            
-            # Rebuild the URL with the updated tab, preserving other parameters
-            url = f"{CHAINLIT_URL}?{urllib.parse.urlencode(query_params)}"
-            return url
-        
-        # For new iframe creation (first open or complete refresh)
+        # Base query parameters
         query_params = {}
-        
-        # Add floating flag
-        query_params['floating'] = 'true'
         
         # Set tab based on current page
         if pathname == '/menu':
@@ -206,6 +228,9 @@ def register_callbacks(app, socketio):
             query_params['tab'] = 'profile'
         else:
             query_params['tab'] = 'home'
+        
+        # Add floating flag
+        query_params['floating'] = 'true'
         
         # Enhanced user info
         if user_data and 'username' in user_data:
@@ -226,9 +251,6 @@ def register_callbacks(app, socketio):
             auth_token = base64.b64encode(json.dumps(auth_data).encode()).decode()
             query_params['token'] = auth_token
             
-            # Also add the username directly as a fallback
-            query_params['user'] = user_data['username']
-
             # If user has active order, add order ID
             if 'active_order' in user_data and user_data['active_order']:
                 if isinstance(user_data['active_order'], dict) and 'id' in user_data['active_order']:
@@ -251,10 +273,13 @@ def register_callbacks(app, socketio):
         
         # Build full URL
         if query_string:
-            return f"{CHAINLIT_URL}?{query_string}"
+            src_url = f"{CHAINLIT_URL}?{query_string}"
         else:
-            return CHAINLIT_URL
-    
+            src_url = CHAINLIT_URL
+        
+        print(f"Setting Chainlit iframe src: {src_url}")
+        return src_url
+
     @app.callback(
         Output('chat-action-trigger', 'children'),
         [

@@ -50,9 +50,9 @@ def register_socketio_handlers(socketio):
     
     # Fix: Add the sid parameter to handle_disconnect
     @socketio.on('disconnect')
-    def handle_disconnect(sid=None):
+    def handle_disconnect():
         """Handle client disconnection"""
-        print(f'Client disconnected: {sid}')
+        print(f'Client disconnected')
     
     @socketio.on('new_order')
     def handle_new_order(data):
