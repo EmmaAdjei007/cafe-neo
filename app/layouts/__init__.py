@@ -23,6 +23,8 @@ def create_main_layout():
         dcc.Store(id='chat-state-store', storage_type='session'),  # Add chat state
         dcc.Store(id='chat-auth-update', storage_type='memory'),
         # Add the following new elements:
+        dcc.Store(id='socket-chat-update', storage_type='memory'),  # For socket updates
+
         dcc.Store(id='chat-auth-trigger', storage_type='memory'),
         html.Div(id='auth-status-listener', style={'display': 'none'}),
     ]
@@ -50,6 +52,18 @@ def create_main_layout():
     # Create the floating chat component
     floating_chat = create_floating_chat()
 
+    hidden_divs = [
+    html.Div(id='chat-message-listener', style={'display': 'none'}),
+    html.Div(id='chat-action-trigger', style={'display': 'none'}),
+
+    # Remove the data-open-chat attribute
+    html.Div(id='socket-chat-update-div', style={'display': 'none'}),
+
+    html.Div(id='navigation-trigger', style={'display': 'none'}),
+    html.Div(id='voice-status', style={'display': 'none'}),
+    html.Div(id="socket-order-update", style={"display": "none"}),
+    ]
+
     # Create the main layout with routing
     layout = html.Div([
         dcc.Location(id='url', refresh=False),
@@ -67,26 +81,17 @@ def create_main_layout():
         login_modal(),
         signup_modal(),
         signup_success_modal(),
+
+ 
         
-        # Add the hidden auth-check div
+        # # Add the hidden auth-check div
         html.Div(id="auth-check", style={"display": "none"}),
         
-        # Add hidden divs for chat communication
-        html.Div(id='chat-message-listener', style={'display': 'none'}),
-        html.Div(id='chat-action-trigger', style={'display': 'none'}),
-        html.Div(id='socket-chat-update', style={'display': 'none'}),
         
-        # Add navigation trigger div for handling navigation requests from chat
-        html.Div(id='navigation-trigger', style={'display': 'none'}),
-        
-        # Add hidden divs for direct message support
-        html.Div(id='voice-status', style={'display': 'none'}),
-        
-        # Add hidden div for order updates
-        html.Div(id="socket-order-update", style={"display": "none"}),
         
         # Add stores and intervals
         *stores,
+        *hidden_divs,
         *intervals
     ])
     
@@ -143,15 +148,14 @@ def register_order_update_callback(app):
         [Input("client-interval", "n_intervals")]
     )
 
-    # Chat-auth listener: updates iframe auth whenever user-store changes
-    # Register clientside callbacks
+    # Chat-auth listener: uses data property instead of className
     app.clientside_callback(
         """
         function(userData) {
             return window.dash_clientside.clientside.updateChatAuth(userData);
         }
         """,
-        Output("chat-auth-update", "className"),
+        Output("chat-auth-update", "data"),
         [Input("user-store", "data")],
         prevent_initial_call=True
     )

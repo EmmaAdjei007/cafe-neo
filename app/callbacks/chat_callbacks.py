@@ -40,17 +40,21 @@ def register_callbacks(app, socketio):
     """
     @app.callback(
     Output('chat-message-listener', 'children', allow_duplicate=True),
-    [Input('socket-chat-update', 'children')],
+    [Input('socket-chat-update', 'data')],  # Changed from 'children' to 'data'
     prevent_initial_call=True
 )
     def update_chat_listener_from_socket(socket_data):
         """Update the chat message listener when socket data is received"""
         if socket_data:
-            # Just pass through the socket data
-            return socket_data
+            # If it's already a string, return it directly
+            if isinstance(socket_data, str):
+                return socket_data
+            # Otherwise, convert to JSON string
+            try:
+                return json.dumps(socket_data)
+            except Exception as e:
+                print(f"Error serializing socket data: {e}")
         return dash.no_update
-
-    # Updated callback function for toggle_chat_panel in app/callbacks/chat_callbacks.py
 
     @app.callback(
     [
@@ -142,27 +146,117 @@ def register_callbacks(app, socketio):
         # Default: no change
         return current_style or hidden_style, current_class or base_class, faq_style or hide_faq
         
-    # Set Chainlit iframe source when panel becomes visible
-    # Fix for authentication passing in app/callbacks/chat_callbacks.py
-        # Find this function and replace it with the below:
-
     @app.callback(
-    Output('chat-auth-trigger', 'data'),
+    Output('chat-auth-trigger', 'data', allow_duplicate=True),
     [Input('user-store', 'data')],
     prevent_initial_call=True
 )
     def send_auth_to_chainlit(user_data):
-        """
-        Send authentication data to the Chainlit iframe
-        when user data changes (like after login)
-        """
+        """Pass authentication data to chat when user logs in"""
         if not user_data:
             return dash.no_update
         
-        # Only send auth update if we have a username
-        if 'username' in user_data:
-            try:
-                # Try to emit via socket.io
+        try:
+            # If we have user data, try to notify the chat component
+            if 'username' in user_data:
+                # Also save to SQLite database for persistence
+                try:
+                    # Import SQLite database functions
+                    import sqlite3
+                    import json
+                    from datetime import datetime
+                    
+                    # Database path
+                    DB_PATH = os.environ.get('DB_PATH', os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'neo_cafe.db'))
+                    
+                    # Connect to database
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    
+                    # Create user_sessions table if not exists
+                    c.execute('''CREATE TABLE IF NOT EXISTS user_sessions
+                                (user_id TEXT PRIMARY KEY,
+                                username TEXT,
+                                email TEXT,
+                                first_name TEXT,
+                                last_name TEXT,
+                                token TEXT,
+                                context TEXT,
+                                last_active TIMESTAMP)''')
+                    
+                    # Create token with user data
+                    token_data = {
+                        'username': user_data['username'],
+                        'id': user_data.get('id', ''),
+                        'email': user_data.get('email', ''),
+                        'first_name': user_data.get('first_name', ''),
+                        'last_name': user_data.get('last_name', '')
+                    }
+                    
+                    import base64
+                    token = base64.b64encode(json.dumps(token_data).encode()).decode()
+                    
+                    # Create context data
+                    context = {
+                        'user_id': user_data['username'],
+                        'username': user_data['username'],
+                        'email': user_data.get('email', ''),
+                        'first_name': user_data.get('first_name', ''),
+                        'last_name': user_data.get('last_name', ''),
+                        'is_authenticated': True,
+                        'token': token
+                    }
+                    
+                    # Add full name if available
+                    first_name = user_data.get('first_name', '')
+                    last_name = user_data.get('last_name', '')
+                    if first_name or last_name:
+                        context['full_name'] = f"{first_name} {last_name}".strip()
+                    
+                    # Convert context to JSON
+                    context_json = json.dumps(context)
+                    
+                    # Check if user session already exists
+                    c.execute('SELECT user_id FROM user_sessions WHERE user_id = ?', (user_data['username'],))
+                    exists = c.fetchone() is not None
+                    
+                    if exists:
+                        # Update existing session
+                        c.execute('''UPDATE user_sessions 
+                                    SET username = ?, email = ?, first_name = ?, last_name = ?, 
+                                    token = ?, context = ?, last_active = ?
+                                    WHERE user_id = ?''',
+                                (user_data['username'],
+                                    user_data.get('email', ''),
+                                    user_data.get('first_name', ''),
+                                    user_data.get('last_name', ''),
+                                    token,
+                                    context_json,
+                                    datetime.now(),
+                                    user_data['username']))
+                        print(f"Updated user session for {user_data['username']}")
+                    else:
+                        # Create new session
+                        c.execute('''INSERT INTO user_sessions
+                                    (user_id, username, email, first_name, last_name, token, context, last_active)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                                (user_data['username'],
+                                    user_data['username'],
+                                    user_data.get('email', ''),
+                                    user_data.get('first_name', ''),
+                                    user_data.get('last_name', ''),
+                                    token,
+                                    context_json,
+                                    datetime.now()))
+                        print(f"Created new user session for {user_data['username']}")
+                    
+                    conn.commit()
+                    conn.close()
+                    print("Successfully saved user session to database")
+                except Exception as db_err:
+                    print(f"Error saving user session to database: {db_err}")
+                
+                # Try to emit via socket connection
                 if hasattr(app, 'socketio'):
                     auth_data = {
                         'type': 'auth_update',
@@ -187,10 +281,10 @@ def register_callbacks(app, socketio):
                     print(f"Auth update sent via socket.io for user: {user_data['username']}")
                 
                 return {'username': user_data['username'], 'timestamp': time.time()}
-            except Exception as e:
-                print(f"Error sending auth to Chainlit: {e}")
+        except Exception as e:
+            print(f"Error updating chat auth: {e}")
         
-        return dash.no_update    
+        return dash.no_update
 
 
     @app.callback(
@@ -546,7 +640,7 @@ def register_callbacks(app, socketio):
 
     # Set up a callback to handle open_floating_chat events
     @app.callback(
-        Output('socket-chat-update', 'data-open-chat'),
+        Output('socket-chat-update', 'data'),
         [Input('socket-chat-update', 'data')],
         prevent_initial_call=True
     )
@@ -563,11 +657,6 @@ def register_callbacks(app, socketio):
         return dash.no_update
     
     
-
-    
-
-
-# Helper function for order status colors
 # Helper function for order status colors
 def get_status_color(status):
     """Get appropriate Bootstrap color class for order status"""

@@ -46,7 +46,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 # Constants
 DASHBOARD_URL = os.environ.get('DASHBOARD_URL', 'http://localhost:8050')
 ROBOT_SIMULATOR_URL = os.environ.get('ROBOT_SIMULATOR_URL', 'http://localhost:8051')
-DB_PATH = os.environ.get('DB_PATH', 'neo_cafe.db')
+DB_PATH = os.environ.get('DB_PATH', os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'neo_cafe.db'))
+logger.debug(f"Using database at: {DB_PATH}")
 SESSION_TIMEOUT = 1800  # 30 minutes
 
 # Global variables
@@ -58,7 +59,7 @@ is_floating_chat = False  # Flag to check if running in floating mode
 # ----- Database Setup -----
 
 def init_db():
-    """Initialize database for conversation history and orders"""
+    """Initialize database for conversation history, orders, and user sessions"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
@@ -82,6 +83,17 @@ def init_db():
                   items TEXT,
                   status TEXT,
                   created_at TIMESTAMP)''')
+    
+    # New table for user sessions
+    c.execute('''CREATE TABLE IF NOT EXISTS user_sessions
+                 (user_id TEXT PRIMARY KEY,
+                  username TEXT,
+                  email TEXT,
+                  first_name TEXT,
+                  last_name TEXT,
+                  token TEXT,
+                  context TEXT,
+                  last_active TIMESTAMP)''')
     
     conn.commit()
     conn.close()
@@ -1590,9 +1602,10 @@ def get_personalized_welcome(context):
     
     return greeting + page_specific + order_content
 
-# ----- Chainlit Handlers -----@cl.on_chat_start
+# ----- Chainlit Handlers -----
+@cl.on_chat_start
 async def start():
-    """Initialize chat session with detailed logging"""
+    """Initialize chat session with persistent user data"""
     # Get URL query parameters safely - with better error handling
     try:
         url_query = ""
@@ -1600,14 +1613,13 @@ async def start():
         if hasattr(cl.context, 'request') and hasattr(cl.context.request, 'query_string'):
             url_query = cl.context.request.query_string.decode('utf-8')
             logger.debug(f"URL query from request: {url_query}")
-        # Fallback to session dict (may cause the error)
+        # Fallback to session dict
         elif hasattr(cl.context, 'session') and isinstance(cl.context.session, dict):
             url_query = cl.context.session.get('url_query', '')
             logger.debug(f"URL query from session dict: {url_query}")
         # Final fallback in case session is an object with get method
         elif hasattr(cl.context, 'session') and hasattr(cl.context.session, 'get'):
             try:
-                # Try with one argument to avoid signature mismatch
                 url_query = cl.context.session.get('url_query')
                 logger.debug(f"URL query from session object (1 arg): {url_query}")
             except TypeError:
@@ -1625,91 +1637,87 @@ async def start():
         logger.error(f"Error parsing URL query: {e}")
         query_dict = {}
 
-    # Add a fallback for detecting login status via cookies
-    is_fallback_auth = False
-    try:
-        if hasattr(cl.context, 'request') and hasattr(cl.context.request, 'cookies'):
-            cookies = cl.context.request.cookies
-            logger.debug(f"Found cookies: {list(cookies.keys())}")
-            auth_cookie_names = ['session', 'auth', 'token', 'user', 'sid']
-            for name in auth_cookie_names:
-                if any(name in cookie_name.lower() for cookie_name in cookies):
-                    is_fallback_auth = True
-                    logger.debug(f"Found potential auth cookie: {name}")
-    except Exception as e:
-        logger.error(f"Error checking cookies: {e}")
-
-    # Authentication context with enhanced logging and fallbacks
+    # Extract session_id and user parameters
+    session_id = query_dict.get('session_id', [str(uuid.uuid4())])[0]
     auth_token = query_dict.get('token', [None])[0]
-    logger.debug(f"Raw auth token: {auth_token[:20] if auth_token else 'None'}")
-
-    # Get direct user param
     direct_user = query_dict.get('user', [None])[0]
-    logger.debug(f"Direct user param: {direct_user}")
-
-    # Immediately check and inject URL parameters as an emergency fix
-    # This is a bit of a hack but will ensure parameters are captured on startup
-    if 'token' in query_dict or 'user' in query_dict:
-        # Force immediate authentication update
-        logger.debug("Direct URL parameters found, injecting authentication immediately")
-        
-        # Extract parameters
-        auth_token = query_dict.get('token', [None])[0]
-        username = query_dict.get('user', [None])[0]
-        
-        # Process username directly if available (highest priority)
-        if username:
-            logger.debug(f"Setting authenticated username from URL: {username}")
-            user_id = username
-            is_authenticated = True
-            user_data = {"username": username}
+    
+    # First check if we have a session_id and user_id match in the database
+    if direct_user:
+        existing_session = get_user_session(direct_user)
+        if existing_session:
+            logger.debug(f"Found existing session for user: {direct_user}")
+            context = existing_session.get('context', {})
             
-            # Try to decode token if available
-            if auth_token:
-                try:
-                    temp_id, temp_auth, temp_data = verify_auth_token(auth_token)
-                    if temp_auth and isinstance(temp_data, dict):
-                        # Use additional fields from token while keeping username
-                        user_data.update({k: v for k, v in temp_data.items() 
-                                         if k != 'username'})
-                        logger.debug(f"Added token data to user: {user_data}")
-                except Exception as e:
-                    logger.error(f"Error decoding direct token: {e}")
-
-    # Extract username from referer header if present
-    parent_username = None
-    try:
-        if hasattr(cl.context, 'request') and hasattr(cl.context.request, 'headers'):
-            referer = cl.context.request.headers.get('referer', '')
-            if 'user=' in referer:
-                parent_username = referer.split('user=')[1].split('&')[0]
-                logger.debug(f"Found username in referer: {parent_username}")
-    except Exception as e:
-        logger.error(f"Error extracting username from referer: {e}")
-
-    # Prepare verification
-    username_candidates = [direct_user, parent_username]
-    username_candidates = [u for u in username_candidates if u]
-
+            # Update context with current page and session
+            context.update({
+                "current_page": query_dict.get('tab', ['home'])[0],
+                "session_id": session_id,
+                "is_floating": query_dict.get('floating', ['false'])[0].lower() == 'true'
+            })
+            
+            # Store the context
+            cl.user_session.set("context", context)
+            logger.debug(f"Loaded user context from database: {context}")
+            
+            # Set up the agent
+            try:
+                agent = initialize_agent_safely(context)
+                if agent:
+                    cl.user_session.set("agent", agent)
+                    logger.debug("Agent setup complete with existing user context")
+                else:
+                    logger.warning("Agent initialization failed, using fallback responses")
+            except Exception as e:
+                logger.error(f"Error setting up agent: {e}")
+            
+            # Send personalized welcome
+            try:
+                full_name = context.get('full_name', '')
+                username = context.get('username', '')
+                welcome_msg = ""
+                
+                if full_name:
+                    welcome_msg = f"Welcome back, {full_name}! How can I assist you today?"
+                elif username:
+                    welcome_msg = f"Welcome back, {username}! How can I assist you today?"
+                else:
+                    welcome_msg = "Welcome to Neo Cafe! How can I help you today?"
+                
+                # Add order info if available
+                order_id = query_dict.get('order_id', [None])[0]
+                if order_id or context.get('active_order'):
+                    active_order_id = order_id or context.get('active_order', {}).get('id')
+                    if active_order_id:
+                        welcome_msg += f"\n\nI see you have an active order (#{active_order_id}). Would you like to check its status?"
+                
+                logger.debug(f"Sending welcome message: {welcome_msg}")
+                await cl.Message(content=welcome_msg).send()
+                
+                # Return early since we've handled everything
+                return
+                
+            except Exception as e:
+                logger.error(f"Error sending welcome message: {e}")
+    
+    # If we don't have an existing session, or something failed, proceed with normal initialization
+    # This is your original authentication logic
     user_id, is_authenticated, user_data = "guest", False, {}
+    
     # Verify token if present
     if auth_token:
         try:
             user_id, is_authenticated, user_data = verify_auth_token(auth_token)
         except Exception as e:
             logger.error(f"Error verifying auth token: {e}")
-    # Fallback to username or cookie-based auth
-    if not is_authenticated and username_candidates:
-        user_id = username_candidates[0]
+    
+    # Fallback to direct user if provided
+    if not is_authenticated and direct_user:
+        user_id = direct_user
         is_authenticated = True
         user_data = {"username": user_id}
         logger.debug(f"Using direct username as fallback: {user_id}")
-    elif not is_authenticated and is_fallback_auth:
-        user_id = "authenticated_user"
-        is_authenticated = True
-        user_data = {"username": "Valued Customer"}
-        logger.debug("Using cookie-based auth fallback")
-
+    
     logger.debug(f"Authentication result: user_id={user_id}, authenticated={is_authenticated}")
     logger.debug(f"User data: {user_data}")
 
@@ -1723,71 +1731,20 @@ async def start():
         "last_name": user_data.get('last_name', ''),
         "full_name": user_data.get('full_name', ''),
         "is_authenticated": is_authenticated,
-        "session_id": query_dict.get('session_id', [str(uuid.uuid4())])[0],
+        "session_id": session_id,
         "is_floating": query_dict.get('floating', ['false'])[0].lower() == 'true'
     }
+    
     # Check for active order
     order_id = query_dict.get('order_id', [None])[0]
     if order_id:
         context["active_order"] = {"id": order_id}
-
-    # Handle authentication from URL parameters
-    auth_token = query_dict.get('token', [None])[0]
-    direct_user = query_dict.get('user', [None])[0]
     
-    logger.debug(f"Auth token from URL: {auth_token[:20] if auth_token else 'None'}")
-    logger.debug(f"User from URL: {direct_user}")
+    # If authenticated, save the session to database
+    if is_authenticated and user_id != "guest":
+        save_user_session(user_id, context)
+        logger.debug(f"Saved user session to database: {user_id}")
     
-    # Process token if present
-    if auth_token and direct_user:
-        try:
-            import base64
-            import json
-            
-            # Try to decode the token
-            try:
-                # Add padding if needed
-                missing_padding = len(auth_token) % 4
-                if missing_padding:
-                    auth_token += '=' * (4 - missing_padding)
-                    
-                decoded_bytes = base64.b64decode(auth_token)
-                user_data = json.loads(decoded_bytes)
-                
-                if isinstance(user_data, dict) and user_data.get('username') == direct_user:
-                    # Update authentication in context
-                    context.update({
-                        "user_id": direct_user,
-                        "username": direct_user,
-                        "email": user_data.get("email", ""),
-                        "first_name": user_data.get("first_name", ""),
-                        "last_name": user_data.get("last_name", ""),
-                        "is_authenticated": True
-                    })
-                    
-                    # Add full name if available
-                    first_name = user_data.get("first_name", "")
-                    last_name = user_data.get("last_name", "")
-                    if first_name or last_name:
-                        full_name = f"{first_name} {last_name}".strip()
-                        context["full_name"] = full_name
-                    
-                    logger.debug(f"Updated context from URL token: {context}")
-                    
-                    # Send auth status back to parent window
-                    try:
-                        cl.send_to_parent({
-                            "type": "auth_status",
-                            "status": "authenticated",
-                            "user": direct_user
-                        })
-                    except:
-                        logger.debug("Could not send auth status to parent")
-            except Exception as decode_err:
-                logger.error(f"Error decoding token from URL: {decode_err}")
-        except Exception as e:
-            logger.error(f"Error processing auth from URL: {e}")
-
     # Save to session
     cl.user_session.set("context", context)
     logger.debug(f"Saved context to session: {context}")
@@ -1800,9 +1757,6 @@ async def start():
             logger.debug("Agent setup complete")
         else:
             logger.warning("Agent initialization failed, using fallback responses")
-        # agent = setup_langchain_agent(context)
-        # cl.user_session.set("agent", agent)
-        # logger.debug("Agent setup complete")
     except Exception as e:
         logger.error(f"Error setting up agent: {e}")
 
@@ -1822,7 +1776,6 @@ async def start():
     except Exception as e:
         logger.error(f"Error sending welcome message: {e}")
         await cl.Message(content="Welcome to Neo Cafe! How can I help you today?").send()
-
 
 @cl.on_window_message
 async def handle_window_message(message):
@@ -1852,59 +1805,6 @@ async def handle_window_message(message):
     else:
         print(f"Could not extract message from: {message}")
 
-# async def process_message(message, message_id=None, source=None):
-#     """
-#     Process a user message and generate a response using the LangChain agent.
-#     Args:
-#         message (str): The user's input message.
-#         message_id (str, optional): Unique identifier for the message.
-#         source (str, optional): Source of the message.
-#     """
-#     global processed_message_ids
-#     context = cl.user_session.get("context", {})
-    
-#     if not message_id:
-#         message_id = f"msg_{time.time()}"
-#     if message_id in processed_message_ids:
-#         print(f"Skipping already processed message: {message_id}")
-#         return
-#     processed_message_ids.add(message_id)
-
-#     agent = cl.user_session.get("agent")
-#     if not agent:
-#         await cl.Message(content="I'm still initializing. Please try again in a moment.").send()
-#         return
-
-#     try:
-#         # Build chat history from memory
-#         memory = agent.memory
-#         chat_history = "\n".join(
-#             [f"{msg.type}: {msg.content}" 
-#              for msg in memory.buffer
-#              if isinstance(msg, (HumanMessage, AIMessage))]
-#         )
-        
-#         prompt = (
-#             f"Conversation history:\n{chat_history}\n\n"
-#             f"Current page: {context.get('current_page', 'home')}\n"
-#             f"User: {message}\n"
-#             f"Assistant:"
-#         )
-        
-#         print(f"Processing message with prompt:\n{prompt}")
-#         response = await cl.make_async(agent.run)(prompt)
-#         await cl.Message(content=response).send()
-        
-#         # Log updated conversation memory
-#         print("Updated conversation memory:")
-#         for msg in memory.buffer:
-#             print(f"{msg.type}: {msg.content}")
-            
-#     except Exception as e:
-#         print(f"Error processing message: {e}")
-#         await cl.Message(
-#             content="I'm having trouble processing your request. Could you try rephrasing?"
-#         ).send()
 
 async def process_message(message, message_id=None, source=None):
     """
@@ -2011,39 +1911,6 @@ async def process_message(message, message_id=None, source=None):
             content="I'm having trouble processing your request. Could you try rephrasing?"
         ).send()
 
-
-
-
-
-# @cl.on_chat_end
-# def on_chat_end():
-#     """Save conversation history when chat ends"""
-#     context = cl.user_session.get("context", {})
-#     if not context:
-#         return
-#     messages = cl.user_session.get("chat_history", [])
-    
-#     conn = sqlite3.connect(DB_PATH)
-#     c = conn.cursor()
-    
-#     # Update session
-#     c.execute('''INSERT OR REPLACE INTO conversations
-#                  (session_id, user_id, created_at, last_active)
-#                  VALUES (?, ?, ?, ?)''',
-#               (context['session_id'], context['user_id'],
-#                datetime.now(), datetime.now()))
-    
-#     # Save messages
-#     for msg in messages:
-#         c.execute('''INSERT INTO messages
-#                      (session_id, content, is_user, timestamp)
-#                      VALUES (?, ?, ?, ?)''',
-#                   (context['session_id'], msg['content'],
-#                    msg['is_user'], datetime.now()))
-    
-#     conn.commit()
-#     conn.close()
-
 @cl.on_chat_end
 def on_chat_end():
     """Save conversation history when chat ends with better error handling"""
@@ -2115,30 +1982,6 @@ async def on_message(message: cl.Message):
         track_message(error_response, is_user=False)
         await cl.Message(content=error_response).send()
 
-# @cl.on_message
-# async def on_message(message: cl.Message):
-#     """Process messages with full context handling"""
-#     # Track user message first
-#     track_message(message.content, is_user=True)
-    
-#     try:
-#         # Process through centralized message handler
-#         response = await process_message(
-#             message=message.content,
-#             message_id=f"chat_{message.id}",
-#             source="chat"
-#         )
-        
-#         # Only send and track if we got a response
-#         if response:
-#             track_message(response, is_user=False)
-#             await cl.Message(content=response).send()
-            
-#     except Exception as e:
-#         error_response = f"Sorry, I need help with that: {str(e)}"
-#         track_message(error_response, is_user=False)
-#         await cl.Message(content=error_response).send()
-
 @cl.on_window_message
 async def handle_auth_message(message):
     """
@@ -2166,7 +2009,10 @@ async def handle_auth_message(message):
                     user_data = json.loads(decoded_bytes)
                     
                     if isinstance(user_data, dict) and user_data.get('username') == user:
-                        # Get current context
+                        # First check if we already have this user session
+                        existing_session = get_user_session(user)
+                        
+                        # Get current context (or create a new one)
                         context = cl.user_session.get("context", {})
                         
                         # Update context with authenticated user
@@ -2186,20 +2032,28 @@ async def handle_auth_message(message):
                             full_name = f"{first_name} {last_name}".strip()
                             context["full_name"] = full_name
                         
-                        # Save updated context
+                        # Add token to context
+                        context["token"] = token
+                        
+                        # Save updated context to session
                         cl.user_session.set("context", context)
                         logger.debug(f"Updated context from token: {context}")
                         
-                        # Re-initialize the agent with the updated context
-                        try:
-                            agent = setup_langchain_agent(context)
-                            cl.user_session.set("agent", agent)
-                            logger.debug("Re-initialized agent with auth context")
-                            
-                            # Send acknowledgment message
-                            await cl.Message(content=f"Welcome, {context.get('full_name') or user}! How can I help you today?").send()
-                        except Exception as agent_err:
-                            logger.error(f"Error re-initializing agent: {agent_err}")
+                        # Also save to database for persistence
+                        save_user_session(user, context)
+                        logger.debug(f"Updated user session in database: {user}")
+                        
+                        # If this is a new user (not in existing session), re-initialize the agent
+                        if not existing_session:
+                            try:
+                                agent = setup_langchain_agent(context)
+                                cl.user_session.set("agent", agent)
+                                logger.debug("Re-initialized agent with auth context")
+                                
+                                # Send acknowledgment message only for new users
+                                await cl.Message(content=f"Welcome, {context.get('full_name') or user}! How can I help you today?").send()
+                            except Exception as agent_err:
+                                logger.error(f"Error re-initializing agent: {agent_err}")
                     else:
                         logger.warning(f"Invalid token for user {user}")
                 except Exception as decode_err:
@@ -2271,6 +2125,150 @@ def load_menu_data():
     except Exception as e:
         print(f"Menu error: {e}")
         return default_menu()
+    
+# Add these functions to chainlit_app/app.py
+
+def save_user_session(user_id, user_data):
+    """
+    Save or update user session data in the database
+    
+    Args:
+        user_id (str): User ID
+        user_data (dict): User data to store
+    
+    Returns:
+        bool: Success status
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        # Convert context to JSON string
+        context_json = json.dumps(user_data)
+        
+        # Check if user session already exists
+        c.execute('SELECT user_id FROM user_sessions WHERE user_id = ?', (user_id,))
+        exists = c.fetchone() is not None
+        
+        if exists:
+            # Update existing session
+            c.execute('''UPDATE user_sessions 
+                        SET username = ?, email = ?, first_name = ?, last_name = ?, 
+                        token = ?, context = ?, last_active = ?
+                        WHERE user_id = ?''',
+                      (user_data.get('username', ''),
+                       user_data.get('email', ''),
+                       user_data.get('first_name', ''),
+                       user_data.get('last_name', ''),
+                       user_data.get('token', ''),
+                       context_json,
+                       datetime.now(),
+                       user_id))
+            logger.debug(f"Updated user session for {user_id}")
+        else:
+            # Create new session
+            c.execute('''INSERT INTO user_sessions
+                        (user_id, username, email, first_name, last_name, token, context, last_active)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                      (user_id,
+                       user_data.get('username', ''),
+                       user_data.get('email', ''),
+                       user_data.get('first_name', ''),
+                       user_data.get('last_name', ''),
+                       user_data.get('token', ''),
+                       context_json,
+                       datetime.now()))
+            logger.debug(f"Created new user session for {user_id}")
+        
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Error saving user session: {e}")
+        return False
+
+def get_user_session(user_id):
+    """
+    Get user session data from the database
+    
+    Args:
+        user_id (str): User ID
+        
+    Returns:
+        dict: User session data or None
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        c.execute('''SELECT username, email, first_name, last_name, token, context
+                    FROM user_sessions
+                    WHERE user_id = ?''', (user_id,))
+        result = c.fetchone()
+        conn.close()
+        
+        if not result:
+            return None
+            
+        username, email, first_name, last_name, token, context_json = result
+        
+        # Parse context JSON
+        try:
+            context = json.loads(context_json)
+        except:
+            context = {}
+            
+        return {
+            'user_id': user_id,
+            'username': username,
+            'email': email,
+            'first_name': first_name,
+            'last_name': last_name,
+            'token': token,
+            'context': context,
+            'is_authenticated': True
+        }
+    except Exception as e:
+        logger.error(f"Error getting user session: {e}")
+        return None
+
+def update_user_session_field(user_id, field, value):
+    """
+    Update a specific field in the user session
+    
+    Args:
+        user_id (str): User ID
+        field (str): Field name to update
+        value: New value
+        
+    Returns:
+        bool: Success status
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        # Validate field name to prevent SQL injection
+        valid_fields = ['username', 'email', 'first_name', 'last_name', 'token', 'context']
+        if field not in valid_fields:
+            logger.error(f"Invalid field name: {field}")
+            conn.close()
+            return False
+            
+        # Special handling for context field (JSON)
+        if field == 'context':
+            value = json.dumps(value)
+            
+        # Update the field
+        query = f"UPDATE user_sessions SET {field} = ?, last_active = ? WHERE user_id = ?"
+        c.execute(query, (value, datetime.now(), user_id))
+        
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Error updating user session field: {e}")
+        return False
 
 def validate_menu_data(data: list):
     """Updated validation for menu items"""
