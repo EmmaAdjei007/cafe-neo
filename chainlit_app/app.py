@@ -59,7 +59,7 @@ is_floating_chat = False  # Flag to check if running in floating mode
 # ----- Database Setup -----
 
 def init_db():
-    """Initialize database for conversation history, orders, and user sessions"""
+    """Initialize database for conversation history and orders"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
@@ -84,16 +84,13 @@ def init_db():
                   status TEXT,
                   created_at TIMESTAMP)''')
     
-    # New table for user sessions
-    c.execute('''CREATE TABLE IF NOT EXISTS user_sessions
-                 (user_id TEXT PRIMARY KEY,
-                  username TEXT,
-                  email TEXT,
-                  first_name TEXT,
-                  last_name TEXT,
-                  token TEXT,
-                  context TEXT,
-                  last_active TIMESTAMP)''')
+    # Add this new table for order state tracking
+    c.execute('''CREATE TABLE IF NOT EXISTS user_state
+                 (session_id TEXT,
+                  state_type TEXT,
+                  state_data TEXT,
+                  updated_at TIMESTAMP,
+                  PRIMARY KEY (session_id, state_type))''')
     
     conn.commit()
     conn.close()
@@ -292,11 +289,11 @@ class OrderManager:
     @staticmethod
     def place_order(order_data):
         """
-        Place an order with the Neo Cafe system with improved format handling.
+        Place an order with the Neo Cafe system with improved detail collection.
         Args:
             order_data (dict or str): Order information in various formats.
         Returns:
-            dict: Order details with ID.
+            dict: Order details with ID or a response requesting more information.
         """
         try:
             # Step 1: Better input handling for various formats
@@ -340,141 +337,107 @@ class OrderManager:
                             order_data = {
                                 "items": items,
                                 "user_id": "guest",
-                                "delivery_type": "table"
+                                "delivery_type": ""  # Empty to trigger the conversation flow
                             }
                         else:
                             raise ValueError("No menu items found in text and couldn't parse as JSON")
             
-            # Step 2: Better validation and standardization
+            # Step 2: Check for required details
+            # Check for items first
             if not isinstance(order_data, dict):
                 raise ValueError(f"Invalid order data type: {type(order_data)}")
                 
+            if "items" not in order_data or not order_data["items"]:
+                return {
+                    "status": "incomplete",
+                    "message": "I don't see any items in your order. What would you like to order?",
+                    "missing_field": "items"
+                }
+                
+            # Convert items to standard format if needed
+            standardized_items = []
+            for item in order_data["items"]:
+                if isinstance(item, dict):
+                    if "item_id" in item:
+                        standardized_items.append(item)
+                    elif "id" in item:
+                        standardized_items.append({
+                            "item_id": item["id"],
+                            "quantity": item.get("quantity", 1),
+                            "special_instructions": item.get("special_instructions", "")
+                        })
+                    elif "name" in item:
+                        # Find item by name
+                        for menu_item in menu_items:
+                            if menu_item["name"].lower() == item["name"].lower():
+                                standardized_items.append({
+                                    "item_id": menu_item["id"],
+                                    "quantity": item.get("quantity", 1),
+                                    "special_instructions": item.get("special_instructions", "")
+                                })
+                                break
+                elif isinstance(item, str):
+                    # Find item by name
+                    for menu_item in menu_items:
+                        if menu_item["name"].lower() == item.lower():
+                            standardized_items.append({
+                                "item_id": menu_item["id"],
+                                "quantity": 1,
+                                "special_instructions": ""
+                            })
+                            break
+                            
+            if standardized_items:
+                order_data["items"] = standardized_items
+            
+            # Step 3: Check for missing required details to create conversational flow
+            
+            # Check for delivery type (dine-in, pickup, delivery)
+            if not order_data.get("delivery_type"):
+                return {
+                    "status": "incomplete",
+                    "message": "Is this order for dine-in, pickup, or delivery?",
+                    "missing_field": "delivery_type",
+                    "order_so_far": order_data
+                }
+                
+            # Check for delivery location based on type
+            if not order_data.get("delivery_location"):
+                if order_data.get("delivery_type").lower() in ["dine-in", "dine in", "dinein"]:
+                    return {
+                        "status": "incomplete",
+                        "message": "Which table should we bring your order to?",
+                        "missing_field": "delivery_location",
+                        "order_so_far": order_data
+                    }
+                elif order_data.get("delivery_type").lower() in ["delivery", "deliver"]:
+                    return {
+                        "status": "incomplete",
+                        "message": "What address should we deliver your order to?",
+                        "missing_field": "delivery_location",
+                        "order_so_far": order_data
+                    }
+                elif order_data.get("delivery_type").lower() in ["pickup", "pick-up", "pick up", "takeout", "take-out", "take out"]:
+                    # For pickup, we can use a default location
+                    order_data["delivery_location"] = "Pickup Counter"
+            
+            # Check for payment method
+            if not order_data.get("payment_method"):
+                return {
+                    "status": "incomplete",
+                    "message": "How would you like to pay? We accept Credit Card, Cash, or Mobile Payment.",
+                    "missing_field": "payment_method",
+                    "order_so_far": order_data
+                }
+                
+            # Step 4: All details are present, continue with order processing
+            
             # Generate order ID if not present
             if "id" not in order_data:
                 order_id = f"ORD-{uuid.uuid4().hex[:8].upper()}"
                 order_data["id"] = order_id
             
-            # Handle different item formats
-            if "items" not in order_data:
-                raise ValueError("Order must contain items")
-            
-            # Step 3: Convert items to standard format
-            items = order_data["items"]
-            standardized_items = []
-            
-            for item in items:
-                if isinstance(item, dict):
-                    # Handle different formats
-                    if "item_id" in item:
-                        # Already in correct format
-                        standardized_item = item
-                    elif "id" in item:
-                        # Convert from {id: X} to {item_id: X}
-                        standardized_item = {
-                            "item_id": item["id"],
-                            "quantity": item.get("quantity", 1),
-                            "special_instructions": item.get("special_instructions", "")
-                        }
-                    elif "name" in item:
-                        # Convert from {name: X} to {item_id: Y}
-                        item_name = item["name"].lower()
-                        found = False
-                        for menu_item in menu_items:
-                            if menu_item["name"].lower() == item_name:
-                                found = True
-                                standardized_item = {
-                                    "item_id": menu_item["id"],
-                                    "quantity": item.get("quantity", 1),
-                                    "special_instructions": item.get("special_instructions", "")
-                                }
-                                break
-                        if not found:
-                            # Use fuzzy matching if exact match not found
-                            best_match = None
-                            best_score = 0
-                            for menu_item in menu_items:
-                                menu_name = menu_item["name"].lower()
-                                # Simple matching score - can be improved
-                                score = 0
-                                for word in item_name.split():
-                                    if word in menu_name:
-                                        score += 1
-                                if score > best_score:
-                                    best_score = score
-                                    best_match = menu_item
-                            
-                            if best_match and best_score > 0:
-                                print(f"Using fuzzy match: '{item_name}' -> '{best_match['name']}'")
-                                standardized_item = {
-                                    "item_id": best_match["id"],
-                                    "quantity": item.get("quantity", 1),
-                                    "special_instructions": item.get("special_instructions", "")
-                                }
-                            else:
-                                raise ValueError(f"Item not found on menu: {item_name}")
-                    else:
-                        raise ValueError(f"Invalid item format: {item}")
-                elif isinstance(item, str):
-                    # Handle string items like ["espresso", "croissant"]
-                    item_name = item.lower()
-                    found = False
-                    for menu_item in menu_items:
-                        if menu_item["name"].lower() == item_name:
-                            found = True
-                            standardized_item = {
-                                "item_id": menu_item["id"],
-                                "quantity": 1,
-                                "special_instructions": ""
-                            }
-                            break
-                    if not found:
-                        # Try fuzzy matching
-                        best_match = None
-                        best_score = 0
-                        for menu_item in menu_items:
-                            menu_name = menu_item["name"].lower()
-                            # Simple matching score
-                            score = 0
-                            for word in item_name.split():
-                                if word in menu_name:
-                                    score += 1
-                            if score > best_score:
-                                best_score = score
-                                best_match = menu_item
-                        
-                        if best_match and best_score > 0:
-                            print(f"Using fuzzy match: '{item_name}' -> '{best_match['name']}'")
-                            standardized_item = {
-                                "item_id": best_match["id"],
-                                "quantity": 1,
-                                "special_instructions": ""
-                            }
-                        else:
-                            raise ValueError(f"Item not found on menu: {item}")
-                else:
-                    raise ValueError(f"Invalid item type: {type(item)}")
-                    
-                standardized_items.append(standardized_item)
-            
-            # Replace items with standardized format
-            order_data["items"] = standardized_items
-            
-            print(f"Standardized order: {order_data}")
-            
-            # Step 4: Validate final order (with more lenient validation)
-            valid_items = []
-            for item in order_data["items"]:
-                if any(menu_item["id"] == item["item_id"] for menu_item in menu_items):
-                    valid_items.append(item)
-                else:
-                    print(f"Warning: Skipping invalid item ID: {item['item_id']}")
-            
-            if not valid_items:
-                raise ValueError("No valid items found in order")
-                
-            order_data["items"] = valid_items
-
-            # Step 5: Add context data with enhanced user handling
+            # Add context data
             context = cl.user_session.get("context", {})
             if "user_id" not in order_data:
                 user_id = context.get("user_id")
@@ -490,108 +453,261 @@ class OrderManager:
             # Make sure username field is also set for compatibility with Dash
             if "username" not in order_data and "user_id" in order_data:
                 order_data["username"] = order_data["user_id"]
-                print(f"Setting username to match user_id: {order_data['username']}")
-            
+                
             # Add timestamp
             order_data["timestamp"] = datetime.now().isoformat()
             
-            # Add delivery information with better defaults
-            if "delivery_location" not in order_data and "delivery_details" in order_data:
-                order_data["delivery_location"] = order_data["delivery_details"]
+            # Calculate total if not provided
+            if "total" not in order_data:
+                total = 0
+                for item in order_data["items"]:
+                    item_id = item.get("item_id")
+                    quantity = item.get("quantity", 1)
+                    # Find item price
+                    for menu_item in menu_items:
+                        if menu_item["id"] == item_id:
+                            total += menu_item.get("price", 0) * quantity
+                            break
+                order_data["total"] = total
             
-            if "delivery_location" not in order_data:
-                # Get from context if available
-                if "delivery_location" in context:
-                    order_data["delivery_location"] = context["delivery_location"]
-                else:
-                    order_data["delivery_location"] = "Table 1"  # Default
-            
-            # Step 6: Save to database (original functionality)
+            # Step 5: Save to database
             try:
                 conn = sqlite3.connect(DB_PATH)
                 c = conn.cursor()
                 c.execute('''INSERT INTO order_history 
                             (order_id, user_id, items, status, created_at)
                             VALUES (?, ?, ?, ?, ?)''',
-                          (order_data["id"], 
-                           order_data.get("user_id", "guest"), 
-                           json.dumps(order_data["items"]), 
-                           "received", 
-                           datetime.now()))
+                        (order_data["id"], 
+                        order_data.get("user_id", "guest"), 
+                        json.dumps(order_data["items"]), 
+                        "received", 
+                        datetime.now()))
                 conn.commit()
                 conn.close()
                 print(f"Order saved to database: {order_data['id']}")
             except Exception as db_error:
                 print(f"Database error: {db_error}")
             
-            # Step 7: Notify dashboard (original functionality)
+            # Step 6: Notify dashboard and update cart
             success = False
             try:
-                # First try Socket.IO if available
+                # CRITICAL: Update cart items for Dash app - this is required for cart integration
+                # Create cart-friendly format
+                cart_items = []
+                for item in order_data["items"]:
+                    item_id = item.get("item_id")
+                    quantity = item.get("quantity", 1)
+                    
+                    # Find menu item details
+                    menu_item = next((m for m in menu_items if m["id"] == item_id), None)
+                    if menu_item:
+                        cart_items.append({
+                            "id": item_id,
+                            "name": menu_item["name"],
+                            "price": menu_item.get("price", 0),
+                            "quantity": quantity,
+                            "special_instructions": item.get("special_instructions", "")
+                        })
+                
+                # Create cart-specific message
+                cart_update = {
+                    "type": "cart_update",
+                    "items": cart_items,
+                    "order_id": order_data["id"],
+                    "username": order_data.get("username", "guest"),
+                    "user_id": order_data.get("user_id", "guest")
+                }
+                
+                # METHOD 1: Try Socket.IO first
                 try:
                     import socketio
                     sio = socketio.Client()
                     sio.connect(DASHBOARD_URL)
+                    # Send both general order update and specific cart update
                     sio.emit('order_update', order_data)
+                    sio.emit('cart_update', cart_update)
                     sio.disconnect()
                     print("Order sent via Socket.IO")
                     success = True
                 except Exception as e:
                     print(f"Error sending order via Socket.IO: {e}")
+                    success = False
                 
-                # Then try REST API
+                # METHOD 2: Try parent window messaging
+                try:
+                    # Send order update to parent window
+                    cl.send_to_parent({
+                        "type": "order_update", 
+                        "order": order_data
+                    })
+                    
+                    # CRITICAL: Also send cart_update event specifically
+                    cl.send_to_parent({
+                        "type": "cart_update",
+                        "items": cart_items,
+                        "order_id": order_data["id"]
+                    })
+                    
+                    print("Order notification sent to parent")
+                    success = True
+                except Exception as e:
+                    print(f"Error sending order via cl.send_to_parent: {e}")
+                
+                # METHOD 3: Try REST API approach
                 if not success:
                     try:
-                        response = requests.post(
+                        # Call the place-order API endpoint
+                        order_response = requests.post(
                             f"{DASHBOARD_URL}/api/place-order", 
-                            json=order_data, 
+                            json=order_data,
                             timeout=5
                         )
-                        print(f"Place order API response: {response.status_code}")
-                        if response.status_code == 200:
+                        
+                        # Call the update-cart API endpoint
+                        cart_response = requests.post(
+                            f"{DASHBOARD_URL}/api/update-cart", 
+                            json=cart_update,
+                            timeout=5
+                        )
+                        
+                        if order_response.status_code == 200 or cart_response.status_code == 200:
+                            print(f"Order API response: {order_response.status_code}, Cart API response: {cart_response.status_code}")
                             success = True
-                    except Exception as e:
-                        print(f"Error calling place-order API: {e}")
+                        else:
+                            print(f"REST API call failed - Order: {order_response.status_code}, Cart: {cart_response.status_code}")
+                    except Exception as api_err:
+                        print(f"Error calling REST API: {api_err}")
                 
-                # Finally, use postMessage as last resort
-                if not success:
-                    try:
-                        cl.send_to_parent({
-                            "type": "order_update", 
-                            "order": order_data
-                        })
-                        print("Order notification sent to parent via postMessage")
-                        success = True
-                    except Exception as e:
-                        print(f"Error sending order via cl.send_to_parent: {e}")
+                # METHOD 4: Also try the file-based approach as last resort
+                try:
+                    os.makedirs('order_data', exist_ok=True)
+                    with open(f"order_data/order_{order_data['id']}.json", 'w') as f:
+                        json.dump(order_data, f)
+                    with open(f"order_data/cart_{order_data['id']}.json", 'w') as f:
+                        json.dump(cart_update, f)
+                    print(f"Order saved to file: order_{order_data['id']}.json")
+                except Exception as e:
+                    print(f"Error saving order to file: {e}")
                 
+                # Update session context
+                context = cl.user_session.get("context", {})
+                context["active_order"] = order_data
+                context["delivery_location"] = order_data.get("delivery_location", "Table 1")
+                cl.user_session.set("context", context)
+                
+                # Important: Clear the order_in_progress state now that order is complete
+                cl.user_session.set("order_in_progress", None)
+                
+                # Return success message
+                return {
+                    "status": "success",
+                    "message": f"Your order has been placed! Order #{order_data['id']}. Your {order_data.get('delivery_type', 'order')} will be ready soon.",
+                    "order": order_data
+                }
+            
             except Exception as e:
-                print(f"Error in dashboard notification: {e}")
-            
-            # Always save to file as backup
-            try:
-                os.makedirs('order_data', exist_ok=True)
-                with open(f"order_data/order_{order_data['id']}.json", 'w') as f:
-                    json.dump(order_data, f)
-                print(f"Order saved to file: order_{order_data['id']}.json")
-            except Exception as e:
-                print(f"Error saving order to file: {e}")
-            
-            # Store in session context
-            context = cl.user_session.get("context", {})
-            context["active_order"] = order_data
-            context["delivery_location"] = order_data.get("delivery_location", "Table 1") 
-            cl.user_session.set("context", context)
-            print("Order saved to session context")
-            
-            return order_data if success else {"error": "Failed to notify dashboard about order", "order_data": order_data}
-            
+                print(f"Error in notification: {e}")
+                # Return basic order info
+                return {
+                    "status": "success",
+                    "message": f"Order placed! Your total is ${order_data.get('total', 0):.2f}",
+                    "order": order_data
+                }
+                
         except Exception as e:
             print(f"Unexpected error placing order: {e}")
             import traceback
             traceback.print_exc()
-            raise
-
+            return {
+                "status": "error",
+                "message": f"I'm sorry, I couldn't process your order: {str(e)}"
+            }
+        
+    @staticmethod
+    def handle_order_response(order_response):
+        """
+        Handle responses from the place_order method, especially for incomplete orders
+        Args:
+            order_response (dict): Response from place_order
+        Returns:
+            str: User-friendly message to display
+        """
+        # Check response type
+        if not isinstance(order_response, dict):
+            return f"There was a problem with your order: {order_response}"
+            
+        status = order_response.get("status", "unknown")
+        
+        if status == "incomplete":
+            # Order needs more details
+            message = order_response.get("message", "I need more information to complete your order.")
+            missing_field = order_response.get("missing_field", "")
+            
+            # Customize prompts based on missing field
+            if missing_field == "delivery_type":
+                return (f"{message} Would you prefer dine-in, pickup, or delivery?")
+            elif missing_field == "delivery_location":
+                if order_response.get("order_so_far", {}).get("delivery_type") == "dine-in":
+                    return (f"{message} Which table number are you sitting at?")
+                else:
+                    return (f"{message} Please provide your delivery address.")
+            elif missing_field == "payment_method":
+                return (f"{message} We accept Credit Card, Cash, and Mobile Payment.")
+            else:
+                return message
+        
+        elif status == "success":
+            # Order placed successfully
+            message = order_response.get("message", "Your order has been placed successfully!")
+            order = order_response.get("order", {})
+            
+            # Format order summary
+            summary = f"{message}\n\n"
+            
+            if order:
+                if "id" in order:
+                    summary += f"Order ID: {order['id']}\n"
+                
+                if "items" in order and order["items"]:
+                    summary += "Items:\n"
+                    try:
+                        # Try to display proper item names
+                        from app.data.database import get_menu_items
+                        menu_lookup = {item["id"]: item for item in menu_items}
+                        
+                        for item in order["items"]:
+                            item_id = item.get("item_id")
+                            quantity = item.get("quantity", 1)
+                            menu_item = menu_lookup.get(item_id, {})
+                            item_name = menu_item.get("name", f"Item #{item_id}")
+                            item_price = menu_item.get("price", 0) * quantity
+                            summary += f"- {quantity}x {item_name} (${item_price:.2f})\n"
+                    except Exception:
+                        # Fallback display
+                        summary += f"- {len(order['items'])} item(s)\n"
+                
+                if "total" in order:
+                    summary += f"\nTotal: ${order['total']:.2f}\n"
+                
+                if "delivery_type" in order:
+                    summary += f"Order type: {order['delivery_type'].title()}\n"
+                
+                if "delivery_location" in order:
+                    summary += f"Location: {order['delivery_location']}\n"
+                    
+                if "payment_method" in order:
+                    summary += f"Payment: {order['payment_method']}\n"
+                
+            return summary
+        
+        elif status == "error":
+            # Order processing error
+            message = order_response.get("message", "There was a problem processing your order.")
+            return f"I'm sorry, but {message} Please try again."
+        
+        else:
+            # Unknown response type
+            return "I'm not sure what happened with your order. Can you try again please?"
 
     @staticmethod
     def get_order_status(order_id):
@@ -1011,7 +1127,7 @@ Email: info@neocafe.com
 
 def parse_order_text(text):
     """
-    Parse natural language order text into structured order data with improved matching.
+    Parse natural language order text into structured order data with improved detail extraction.
     Args:
         text (str): Natural language order description.
     Returns:
@@ -1033,7 +1149,80 @@ def parse_order_text(text):
             if len(special_parts) > 1:
                 special_instructions_global = f"With {parts[1]}"
         
-        # Process each menu item
+        # Extract delivery type
+        delivery_type = ""  # Empty to trigger follow-up question
+        delivery_terms = {
+            "dine in": "dine-in",
+            "dine-in": "dine-in", 
+            "dinein": "dine-in",
+            "table": "dine-in",
+            "pickup": "pickup",
+            "pick up": "pickup",
+            "pick-up": "pickup",
+            "takeout": "pickup",
+            "take out": "pickup",
+            "take-out": "pickup",
+            "delivery": "delivery",
+            "deliver": "delivery", 
+            "bring to": "delivery",
+            "send to": "delivery"
+        }
+        
+        for term, dtype in delivery_terms.items():
+            if term in text_lower:
+                delivery_type = dtype
+                break
+        
+        # Extract delivery location
+        delivery_location = ""
+        if "table" in text_lower:
+            table_index = text_lower.find("table")
+            if table_index != -1:
+                after_table = text_lower[table_index+5:].strip()
+                table_parts = after_table.split()
+                if table_parts and table_parts[0].isdigit():
+                    delivery_location = f"Table {table_parts[0]}"
+                elif len(table_parts) > 0:
+                    delivery_location = f"Table area: {' '.join(table_parts[:3])}"
+        elif any(term in text_lower for term in ["deliver to", "delivery to", "send to", "bring to"]):
+            for term in ["deliver to", "delivery to", "send to", "bring to"]:
+                if term in text_lower:
+                    location_start = text_lower.find(term) + len(term)
+                    location_text = text_lower[location_start:].strip()
+                    # Extract up to the next punctuation or end
+                    end_idx = len(location_text)
+                    for i, char in enumerate(location_text):
+                        if char in ['.', ',', ';', '!', '?']:
+                            end_idx = i
+                            break
+                    if end_idx > 0:
+                        delivery_location = location_text[:end_idx].strip()
+                    break
+        
+        # Extract payment method
+        payment_method = ""
+        payment_terms = {
+            "credit card": "Credit Card",
+            "credit": "Credit Card",
+            "card": "Credit Card",
+            "visa": "Credit Card",
+            "mastercard": "Credit Card",
+            "cash": "Cash",
+            "money": "Cash",
+            "mobile payment": "Mobile Payment",
+            "mobile": "Mobile Payment",
+            "apple pay": "Mobile Payment",
+            "google pay": "Mobile Payment",
+            "samsung pay": "Mobile Payment",
+            "phone": "Mobile Payment"
+        }
+        
+        for term, method in payment_terms.items():
+            if term in text_lower:
+                payment_method = method
+                break
+        
+        # Process menu items (original code)
         for item in menu_items:
             item_name_lower = item["name"].lower()
             
@@ -1043,7 +1232,6 @@ def parse_order_text(text):
                 item_name_lower.replace(" ", ""),  # No spaces
                 item_name_lower.replace("-", ""),  # No hyphens
                 item_name_lower.replace(" ", "-"),  # Spaces as hyphens
-                # Add common spelling variations if needed
             ]
             
             found = False
@@ -1088,8 +1276,8 @@ def parse_order_text(text):
                 })
                 print(f"Found item: {item['name']}, quantity: {quantity}")
         
+        # Try fuzzy matching if no items found
         if not order_items:
-            # Try fuzzy matching for items
             words = text_lower.split()
             for word in words:
                 if len(word) > 3:  # Skip short words
@@ -1116,36 +1304,20 @@ def parse_order_text(text):
         
         if not order_items:
             raise ValueError("No menu items found in order text")
-            
-        # Determine delivery type
-        delivery_type = "table"
-        if "delivery" in text_lower:
-            delivery_type = "delivery"
-            
-        # Extract delivery details
-        delivery_details = ""
-        if "to table" in text_lower:
-            table_index = text_lower.find("to table")
-            if table_index != -1:
-                after_table = text_lower[table_index+8:].strip()
-                table_parts = after_table.split()
-                if table_parts and table_parts[0].isdigit():
-                    delivery_details = f"Table {table_parts[0]}"
-                elif len(table_parts) > 0:
-                    delivery_details = f"Table area: {' '.join(table_parts[:3])}"
         
-        # Build the order structure
+        # Build the order structure with enhanced details
         return {
             "user_id": context.get("user_id", "guest"),
             "items": order_items,
             "delivery_type": delivery_type,
-            "delivery_details": delivery_details,
+            "delivery_location": delivery_location,
+            "payment_method": payment_method,
             "special_instructions": special_instructions_global
         }
     except Exception as e:
         print(f"Parse order error details: {e}")
         raise ValueError(f"Could not parse order text: {str(e)}")
-
+    
 def query_knowledge_base(query):
     """
     Query the vector store for relevant information.
@@ -1347,8 +1519,14 @@ def initialize_agent_safely(context):
             ),
             Tool(
                 name="PlaceOrderTool",
-                func=OrderManager.place_order,
-                description="Place an order with Neo Cafe. Expects either a JSON string or natural language order description"
+                func=lambda x: OrderManager.handle_order_response(OrderManager.place_order(x)),
+                description="""Place an order with Neo Cafe. Expects either a JSON string or natural language order description.
+                            IMPORTANT: You must gather all the required details before placing an order:
+                            1. Items to order (what food/drinks)
+                            2. Delivery type (dine-in, pickup, or delivery)
+                            3. Location (table number for dine-in, address for delivery)
+                            4. Payment method (Credit Card, Cash, or Mobile Payment)
+                            If any of these details are missing, you must ask the customer before proceeding."""
             ),
             Tool(
                 name="GetOrderStatusTool",
@@ -1390,7 +1568,16 @@ IMPORTANT GUIDELINES:
 1. Be helpful, friendly, and concise
 2. Use appropriate tools for accurate information
 3. For menu inquiries, use SearchMenuTool
-4. For placing orders, use PlaceOrderTool
+
+4. FOR PLACING ORDERS, FOLLOW THIS EXACT PROCESS:
+   a. First ask what items they would like to order and use SearchMenuTool if needed
+   b. Then ask if the order is for dine-in, pickup, or delivery
+   c. If dine-in, ask which table number they're sitting at
+   d. If delivery, ask for the delivery address
+   e. Always ask for payment method preference (Credit Card, Cash, Mobile Payment)
+   f. ONLY after collecting ALL these details should you use PlaceOrderTool
+   g. If the PlaceOrderTool returns a message about missing details, ask the customer for that specific information
+
 5. For checking order status, use GetOrderStatusTool
 6. For navigation, use NavigateTool
 7. Always address the user by name ({username}) if they are authenticated
@@ -1606,6 +1793,9 @@ def get_personalized_welcome(context):
 @cl.on_chat_start
 async def start():
     """Initialize chat session with persistent user data"""
+    # Initialize order tracking
+    cl.user_session.set("order_in_progress", None)
+    
     # Get URL query parameters safely - with better error handling
     try:
         url_query = ""
@@ -1805,10 +1995,9 @@ async def handle_window_message(message):
     else:
         print(f"Could not extract message from: {message}")
 
-
 async def process_message(message, message_id=None, source=None):
     """
-    Process a user message and generate a response with improved error handling
+    Process a user message and generate a response with improved order handling
     
     Args:
         message (str): The user's input message.
@@ -1828,6 +2017,97 @@ async def process_message(message, message_id=None, source=None):
     # First, track the user message
     track_message(message, is_user=True)
     
+    # Check if we're in the middle of an order flow
+    order_in_progress = cl.user_session.get("order_in_progress", None)
+    
+    if order_in_progress:
+        print(f"Continuing order in progress: {order_in_progress}")
+        
+        # Handle the response based on what we were waiting for
+        missing_field = order_in_progress.get("missing_field", "")
+        order_so_far = order_in_progress.get("order_so_far", {})
+        
+        if missing_field == "delivery_type":
+            # Update the delivery type based on user response
+            delivery_type = ""
+            msg_lower = message.lower()
+            
+            if any(term in msg_lower for term in ["dine", "dine in", "dine-in", "eat in", "table"]):
+                delivery_type = "dine-in"
+            elif any(term in msg_lower for term in ["pickup", "pick up", "pick-up", "take out", "takeout", "take-out"]):
+                delivery_type = "pickup"
+            elif any(term in msg_lower for term in ["delivery", "deliver", "send", "bring"]):
+                delivery_type = "delivery"
+                
+            if delivery_type:
+                # Update the order
+                order_so_far["delivery_type"] = delivery_type
+                
+                # Try to continue the order
+                response = OrderManager.place_order(order_so_far)
+                
+                # If we need more info, update the order in progress
+                if response.get("status") == "incomplete":
+                    cl.user_session.set("order_in_progress", response)
+                else:
+                    # Order completed or error
+                    cl.user_session.set("order_in_progress", None)
+                
+                # Send the response
+                user_message = OrderManager.handle_order_response(response)
+                track_message(user_message, is_user=False)
+                await cl.Message(content=user_message).send()
+                return
+        
+        elif missing_field == "delivery_location":
+            # Update the delivery location based on user response
+            order_so_far["delivery_location"] = message.strip()
+            
+            # Try to continue the order
+            response = OrderManager.place_order(order_so_far)
+            
+            # If we need more info, update the order in progress
+            if response.get("status") == "incomplete":
+                cl.user_session.set("order_in_progress", response)
+            else:
+                # Order completed or error
+                cl.user_session.set("order_in_progress", None)
+            
+            # Send the response
+            user_message = OrderManager.handle_order_response(response)
+            track_message(user_message, is_user=False)
+            await cl.Message(content=user_message).send()
+            return
+            
+        elif missing_field == "payment_method":
+            # Update the payment method based on user response
+            payment_method = ""
+            msg_lower = message.lower()
+            
+            if any(term in msg_lower for term in ["credit", "card", "visa", "mastercard", "credit card"]):
+                payment_method = "Credit Card"
+            elif any(term in msg_lower for term in ["cash", "money"]):
+                payment_method = "Cash"
+            elif any(term in msg_lower for term in ["mobile", "phone", "apple pay", "google pay", "mobile payment"]):
+                payment_method = "Mobile Payment"
+                
+            if payment_method:
+                # Update the order
+                order_so_far["payment_method"] = payment_method
+                
+                # Try to continue the order
+                response = OrderManager.place_order(order_so_far)
+                
+                # Order should be complete now
+                cl.user_session.set("order_in_progress", None)
+                
+                # Send the response
+                user_message = OrderManager.handle_order_response(response)
+                track_message(user_message, is_user=False)
+                await cl.Message(content=user_message).send()
+                return
+    
+    # If we got here, either there's no order in progress or we didn't handle it directly
     # Get the agent, if available
     agent = cl.user_session.get("agent")
     
@@ -1880,6 +2160,56 @@ async def process_message(message, message_id=None, source=None):
                 timeout=30  # 30 second timeout
             )
             
+            # Check if this is an order response
+            if "incomplete" in response.lower() and any(phrase in response.lower() for phrase in 
+                ["dine-in, pickup, or delivery", "table number", "delivery address", "payment method"]):
+                
+                # Try to extract order info
+                order_in_progress = None
+                
+                if "dine-in, pickup, or delivery" in response.lower():
+                    order_in_progress = {
+                        "status": "incomplete",
+                        "missing_field": "delivery_type",
+                        "order_so_far": {"items": parse_items_from_response(response)}
+                    }
+                elif "table number" in response.lower():
+                    order_in_progress = {
+                        "status": "incomplete",
+                        "missing_field": "delivery_location",
+                        "order_so_far": {
+                            "items": parse_items_from_response(response),
+                            "delivery_type": "dine-in"
+                        }
+                    }
+                elif "delivery address" in response.lower():
+                    order_in_progress = {
+                        "status": "incomplete",
+                        "missing_field": "delivery_location",
+                        "order_so_far": {
+                            "items": parse_items_from_response(response),
+                            "delivery_type": "delivery"
+                        }
+                    }
+                elif "payment method" in response.lower():
+                    # Extract order details from response
+                    items = parse_items_from_response(response)
+                    delivery_type = parse_delivery_type(response)
+                    delivery_location = parse_delivery_location(response)
+                    
+                    order_in_progress = {
+                        "status": "incomplete",
+                        "missing_field": "payment_method",
+                        "order_so_far": {
+                            "items": items,
+                            "delivery_type": delivery_type,
+                            "delivery_location": delivery_location
+                        }
+                    }
+                
+                if order_in_progress:
+                    cl.user_session.set("order_in_progress", order_in_progress)
+            
             # Track and send the response
             track_message(response, is_user=False)
             await cl.Message(content=response).send()
@@ -1914,6 +2244,9 @@ async def process_message(message, message_id=None, source=None):
 @cl.on_chat_end
 def on_chat_end():
     """Save conversation history when chat ends with better error handling"""
+    # Add this to the on_chat_end function to save order state
+    save_order_state()
+
     try:
         context = cl.user_session.get("context", {})
         if not context:
@@ -2269,6 +2602,59 @@ def update_user_session_field(user_id, field, value):
     except Exception as e:
         logger.error(f"Error updating user session field: {e}")
         return False
+    
+
+def parse_items_from_response(response):
+    """Extract order items mentioned in a response"""
+    # Simplified version - in production you'd want more sophisticated parsing
+    items = []
+    
+    # Try to find items mentioned in the response
+    for menu_item in menu_items:
+        if menu_item["name"].lower() in response.lower():
+            items.append({
+                "item_id": menu_item["id"],
+                "quantity": 1,
+                "special_instructions": ""
+            })
+    
+    if not items:
+        # Default item if we couldn't find any
+        items.append({
+            "item_id": 1,  # Assuming ID 1 is a valid item
+            "quantity": 1,
+            "special_instructions": ""
+        })
+    
+    return items
+
+def parse_delivery_type(response):
+    """Extract delivery type from a response"""
+    response_lower = response.lower()
+    
+    if "dine-in" in response_lower or "dine in" in response_lower or "table" in response_lower:
+        return "dine-in"
+    elif "pickup" in response_lower or "pick up" in response_lower or "pick-up" in response_lower:
+        return "pickup"
+    elif "delivery" in response_lower or "deliver" in response_lower:
+        return "delivery"
+    
+    return "dine-in"  # Default
+
+def parse_delivery_location(response):
+    """Extract delivery location from a response"""
+    response_lower = response.lower()
+    
+    if "table" in response_lower:
+        # Try to extract table number
+        parts = response_lower.split("table")
+        if len(parts) > 1:
+            after_table = parts[1].strip()
+            words = after_table.split()
+            if words and words[0].isdigit():
+                return f"Table {words[0]}"
+    
+    return "Table 1"  # Default
 
 def validate_menu_data(data: list):
     """Updated validation for menu items"""
@@ -2284,30 +2670,60 @@ def validate_menu_data(data: list):
         if not isinstance(item['price'], (int, float)):
             raise ValueError(f"Invalid price format in item: {item['id']}")
 
-def default_menu():
-    """Updated default menu with all required fields"""
-    return [
-        {
-            "id": 1,
-            "name": "Espresso",
-            "description": "Rich espresso blend",
-            "price": 2.95,
-            "category": "coffee",
-            "vegetarian": True,
-            "vegan": False,
-            "gluten_free": True
-        },
-        {
-            "id": 2,
-            "name": "Croissant",
-            "description": "Buttery pastry",
-            "price": 3.25,
-            "category": "pastries",
-            "vegetarian": True,
-            "vegan": False,
-            "gluten_free": False
-        }
-    ]
+# And add this function to save/restore order state if needed
+def save_order_state():
+    """Save current order state to database for persistence"""
+    try:
+        order_in_progress = cl.user_session.get("order_in_progress")
+        session_id = cl.user_session.get("context", {}).get("session_id")
+        
+        if order_in_progress and session_id:
+            # Connect to database
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            
+            # Save order state
+            c.execute('''INSERT OR REPLACE INTO user_state
+                        (session_id, state_type, state_data, updated_at)
+                        VALUES (?, ?, ?, ?)''',
+                     (session_id, 
+                      "order_in_progress", 
+                      json.dumps(order_in_progress), 
+                      datetime.now().isoformat()))
+            
+            conn.commit()
+            conn.close()
+            print(f"Saved order state for session: {session_id}")
+    except Exception as e:
+        print(f"Error saving order state: {e}")
+
+def restore_order_state():
+    """Restore order state from database if available"""
+    try:
+        session_id = cl.user_session.get("context", {}).get("session_id")
+        
+        if session_id:
+            # Connect to database
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            
+            # Get order state
+            c.execute('''SELECT state_data FROM user_state
+                        WHERE session_id = ? AND state_type = ?''',
+                     (session_id, "order_in_progress"))
+            
+            result = c.fetchone()
+            conn.close()
+            
+            if result:
+                order_data = json.loads(result[0])
+                cl.user_session.set("order_in_progress", order_data)
+                print(f"Restored order state for session: {session_id}")
+                return True
+    except Exception as e:
+        print(f"Error restoring order state: {e}")
+    
+    return False
 
 @cl.set_starters
 async def set_starters():

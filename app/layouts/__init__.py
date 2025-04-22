@@ -58,7 +58,7 @@ def create_main_layout():
 
     # Remove the data-open-chat attribute
     html.Div(id='socket-chat-update-div', style={'display': 'none'}),
-
+    html.Div(id="socket-cart-update", style={"display": "none"}),
     html.Div(id='navigation-trigger', style={'display': 'none'}),
     html.Div(id='voice-status', style={'display': 'none'}),
     html.Div(id="socket-order-update", style={"display": "none"}),
@@ -159,3 +159,46 @@ def register_order_update_callback(app):
         [Input("user-store", "data")],
         prevent_initial_call=True
     )
+
+    app.clientside_callback(
+    """
+    function(n) {
+        if (!window._cartUpdateListenerInitialized) {
+            window._cartUpdateListenerInitialized = true;
+            
+            // Listen for cart updates from socket.io
+            if (window.socket) {
+                window.socket.on('cart_update', function(data) {
+                    console.log('Cart update received:', data);
+                    window._lastCartUpdate = JSON.stringify(data);
+                    
+                    // Trigger callback by returning data
+                    if (window._dashCallbacks) {
+                        window._dashCallbacks.forEach(callback => callback());
+                    }
+                });
+            } else {
+                // Wait for socket to be available
+                window._socketCartInterval = setInterval(function() {
+                    if (window.socket) {
+                        window.socket.on('cart_update', function(data) {
+                            console.log('Cart update received:', data);
+                            window._lastCartUpdate = JSON.stringify(data);
+                            
+                            // Trigger callback by returning data
+                            if (window._dashCallbacks) {
+                                window._dashCallbacks.forEach(callback => callback());
+                            }
+                        });
+                        clearInterval(window._socketCartInterval);
+                    }
+                }, 1000);
+            }
+        }
+        
+        return window._lastCartUpdate || null;
+    }
+    """,
+    Output("socket-cart-update", "children"),
+    [Input("client-interval", "n_intervals")]
+)

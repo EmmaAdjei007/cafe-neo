@@ -28,6 +28,33 @@ def configure_server(server, socketio):
         server (Flask): Flask server instance
         socketio (SocketIO): SocketIO instance
     """
+    # Add this to the configure_server function in server.py
+    @socketio.on('cart_update')
+    def handle_cart_update(data):
+        """
+        Handle cart update events from Chainlit
+        
+        Args:
+            data (dict): Cart data with items
+        """
+        try:
+            print(f"Cart update received: {data}")
+            
+            # Validate data format
+            if not isinstance(data, dict) or 'items' not in data:
+                print(f"Invalid cart data format: {type(data)}")
+                return {"status": "error", "message": "Invalid data format"}
+            
+            # Broadcast the cart update to all clients
+            socketio.emit('cart_update', data)
+            
+            # Return success
+            return {"status": "success", "message": "Cart update broadcast successfully"}
+        except Exception as e:
+            print(f"Error handling cart update: {e}")
+            return {"status": "error", "message": str(e)}
+
+
     @server.route('/chainlit-status', methods=['GET'])
     def chainlit_status():
         """API endpoint to check Chainlit status"""
