@@ -124,26 +124,28 @@ def register_callbacks(app):
             return dash.no_update
             
     @app.callback(
-        Output('navigation-trigger', 'children'),
-        [Input('socket-chat-update', 'children')]
-    )
+    Output('navigation-trigger', 'children'),
+    [Input('socket-chat-update', 'data')]  # Changed from 'children' to 'data'
+)
     def update_navigation_trigger(socket_data):
         """Update navigation trigger when socket data is received"""
         if not socket_data:
             return dash.no_update
-            
+                
         try:
-            # Try to parse as JSON
-            data = json.loads(socket_data)
+            # Try to parse as JSON if it's a string
+            data = socket_data
+            if isinstance(socket_data, str):
+                data = json.loads(socket_data)
             
             # Check if it's a navigation message
             if isinstance(data, dict) and data.get('type') == 'navigation':
-                return socket_data
+                return json.dumps(data)  # Return stringified data
             
             # Not a navigation message
             return dash.no_update
-        except:
-            # Error parsing JSON
+        except Exception as e:
+            print(f"Error in update_navigation_trigger: {e}")
             return dash.no_update
     
     @app.callback(

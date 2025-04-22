@@ -1,20 +1,23 @@
-/**
- * Clientside callback functions for Neo Cafe
- * This file must be placed in the assets/js directory
- */
+//# Update this in templates/clientside.js or in your assets/js directory
 
-// Create the clientside namespace if it doesn't exist
 if (!window.dash_clientside) {
     window.dash_clientside = {};
 }
 
-// Create the clientside namespace
 window.dash_clientside.clientside = {
     /**
+     * Update chat authentication - use data property instead of className
+     */
+    updateChatAuth: function(userData) {
+        console.log('Updating chat authentication with user data:', userData);
+        
+        // Your existing auth update code here...
+        
+        return userData; // Return the data instead of modifying className
+    },
+    
+    /**
      * Listen for events in the chat and update the chat message listener
-     * This function is called by a Dash clientside callback
-     * 
-     * @returns {string} Message JSON to update the hidden div
      */
     updateChatListener: function() {
         console.log('Initializing chat message listener');
@@ -49,8 +52,8 @@ window.dash_clientside.clientside = {
             window.addEventListener('message', function(event) {
                 // Check if it's a message we care about
                 if (event.data && (event.data.type === 'navigation' || 
-                                   event.data.type === 'order_update' ||
-                                   event.data.type === 'chat_message')) {
+                                 event.data.type === 'order_update' ||
+                                 event.data.type === 'chat_message')) {
                     console.log('Received postMessage event:', event.data);
                     window._lastChatMessage = JSON.stringify(event.data);
                 }
@@ -61,27 +64,3 @@ window.dash_clientside.clientside = {
         return window._lastChatMessage || null;
     }
 };
-
-// Initialize socket listener as soon as DOM is ready
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('DOM loaded, initializing socket listener');
-    
-    // Set up an interval to check if socket is available
-    const socketCheck = setInterval(function() {
-        // Check if socket.io is loaded and connected
-        if (typeof io !== 'undefined') {
-            console.log('Socket.io found, connecting');
-            // Store socket in window object so it's accessible to callback
-            window.socket = io.connect();
-            
-            // Set up listener for update events
-            window.socket.on('update_chat_message_listener', function(data) {
-                console.log('Received update_chat_message_listener:', data);
-                window._lastChatMessage = data;
-            });
-            
-            // Clear the interval once we've set up the listener
-            clearInterval(socketCheck);
-        }
-    }, 1000);
-});

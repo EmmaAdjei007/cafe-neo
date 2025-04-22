@@ -41,100 +41,51 @@ def register_callbacks(app, socketio):
     @app.callback(
     [Output("cart-store", "data", allow_duplicate=True),
      Output("cart-alert", "children", allow_duplicate=True)],
-    [Input("socket-order-update", "children")],
+    [Input("socket-order-update", "children"),
+     Input("socket-cart-update", "children")],  # Added new cart-specific input
     [State("cart-store", "data"),
      State("user-store", "data")],
     prevent_initial_call=True
 )
-    def update_cart_from_chainlit(socket_update, current_cart, user_data):
+    def update_cart_from_chainlit(socket_update, cart_update, current_cart, user_data):
         """Update cart when order comes from Chainlit"""
-        if not socket_update:
-            return dash.no_update, dash.no_update
+        ctx = callback_context
+        trigger_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
         
-        try:
-            # Parse the order data
-            order_data = json.loads(socket_update)
-            
-            # Verify this is a valid order with items
-            if not isinstance(order_data, dict) or 'items' not in order_data:
-                return dash.no_update, dash.no_update
-            
-            print(f"Received order from Chainlit: {order_data.get('id', 'unknown')} with {len(order_data['items'])} items")
-            
-            # Check user info with more flexible matching
-            current_username = user_data.get('username') if user_data else None
-            order_username = order_data.get('username') or order_data.get('user_id')
-            
-            # Process the order if it belongs to the current user or is for guest
-            if not current_username or not order_username or \
-            current_username == order_username or \
-            order_username == "guest":
+        # Handle cart-specific update
+        if trigger_id == "socket-cart-update" and cart_update:
+            try:
+                # Parse the cart data
+                cart_data = json.loads(cart_update)
                 
-                # Update user's active order
-                if user_data and 'id' in order_data:
-                    try:
-                        # Update user store with active order
-                        updated_user = dict(user_data)
-                        updated_user['active_order'] = order_data
-                        # You'll need to trigger a callback to update user-store here
-                        # For simplicity, just log it
-                        print(f"Should update user's active order to: {order_data['id']}")
-                    except Exception as e:
-                        print(f"Error updating user's active order: {e}")
+                logger.debug(f"Received cart update: {cart_data}")
                 
-                # Convert items to cart format
-                cart_items = []
+                # Verify this is a valid cart update
+                if not isinstance(cart_data, dict) or 'items' not in cart_data:
+                    return dash.no_update, dash.no_update
                 
-                for item in order_data['items']:
+                # Process items in a format compatible with cart-store
+                new_cart_items = []
+                for item in cart_data['items']:
                     if isinstance(item, dict):
-                        # Handle different formats
-                        if "item_id" in item:
-                            try:
-                                from app.data.database import get_menu_item_by_id
-                                menu_item = get_menu_item_by_id(item['item_id'])
-                                
-                                if menu_item:
-                                    cart_item = {
-                                        "id": menu_item["id"],
-                                        "name": menu_item["name"],
-                                        "price": menu_item.get("price", 0),
-                                        "quantity": item.get("quantity", 1)
-                                    }
-                                    cart_items.append(cart_item)
-                                else:
-                                    print(f"Menu item not found for ID: {item['item_id']}")
-                            except Exception as e:
-                                print(f"Error getting menu item: {e}")
-                        elif 'id' in item and 'name' in item:
-                            # Already in correct format
-                            cart_items.append(item)
-                        elif 'name' in item:
-                            # Try to find item in menu by name
-                            try:
-                                from app.data.database import get_menu_items
-                                menu_items = get_menu_items()
-                                menu_item = next((mi for mi in menu_items if mi["name"].lower() == item["name"].lower()), None)
-                                
-                                if menu_item:
-                                    cart_item = {
-                                        "id": menu_item["id"],
-                                        "name": menu_item["name"],
-                                        "price": menu_item.get("price", 0),
-                                        "quantity": item.get("quantity", 1)
-                                    }
-                                    cart_items.append(cart_item)
-                            except Exception as e:
-                                print(f"Error finding menu item by name: {e}")
+                        # Ensure required fields
+                        if all(key in item for key in ['id', 'name', 'price']):
+                            new_cart_items.append({
+                                "id": item['id'],
+                                "name": item['name'],
+                                "price": item.get('price', 0),
+                                "quantity": item.get('quantity', 1),
+                                "special_instructions": item.get('special_instructions', '')
+                            })
                 
-                # If we have cart items, return them
-                if cart_items:
-                    print(f"Updating cart with {len(cart_items)} items from Chainlit order")
+                if new_cart_items:
+                    logger.debug(f"Updating cart with {len(new_cart_items)} items from Chainlit")
                     
                     # Create a notification alert
                     alert = dbc.Alert(
                         [
                             html.I(className="fas fa-shopping-cart me-2"),
-                            f"Cart updated from chatbot order! Added {len(cart_items)} items.",
+                            f"Cart updated from chatbot order! Added {len(new_cart_items)} items.",
                             dbc.Button("View Cart", color="light", size="sm", href="/orders", className="ms-2")
                         ],
                         color="success",
@@ -145,13 +96,138 @@ def register_callbacks(app, socketio):
                         style={"zIndex": 1050, "minWidth": "300px"}
                     )
                     
-                    return cart_items, alert
+                    return new_cart_items, alert
             
-            return dash.no_update, dash.no_update
-            
-        except Exception as e:
-            print(f"Error updating cart from Chainlit: {e}")
-            return dash.no_update, dash.no_update
+            except Exception as e:
+                logger.error(f"Error updating cart from cart update: {e}")
+                return dash.no_update, dash.no_update
+        
+        # Handle order update
+        if trigger_id == "socket-order-update" and socket_update:
+            try:
+                # Parse the order data
+                order_data = json.loads(socket_update)
+                
+                # Check the message type - if it's specifically a cart_update, handle it differently
+                if isinstance(order_data, dict) and order_data.get('type') == 'cart_update':
+                    logger.debug(f"Received cart_update type in order update: {order_data}")
+                    # Extract cart items
+                    if 'items' in order_data:
+                        new_cart_items = order_data['items']
+                        
+                        # Create a notification alert
+                        alert = dbc.Alert(
+                            [
+                                html.I(className="fas fa-shopping-cart me-2"),
+                                f"Cart updated from chatbot! Added {len(new_cart_items)} items.",
+                                dbc.Button("View Cart", color="light", size="sm", href="/orders", className="ms-2")
+                            ],
+                            color="success",
+                            dismissable=True,
+                            is_open=True,
+                            duration=5000,
+                            className="position-fixed bottom-0 end-0 m-3",
+                            style={"zIndex": 1050, "minWidth": "300px"}
+                        )
+                        
+                        return new_cart_items, alert
+                
+                # Continue with regular order processing
+                # Verify this is a valid order with items
+                if not isinstance(order_data, dict) or 'items' not in order_data:
+                    return dash.no_update, dash.no_update
+                
+                logger.debug(f"Received order: {order_data.get('id', 'unknown')} with {len(order_data['items'])} items")
+                
+                # Check user info with more flexible matching
+                current_username = user_data.get('username') if user_data else None
+                order_username = order_data.get('username') or order_data.get('user_id')
+                
+                # Process the order if it belongs to the current user or is for guest
+                if not current_username or not order_username or \
+                current_username == order_username or \
+                order_username == "guest":
+                    
+                    # Update user's active order
+                    if user_data and 'id' in order_data:
+                        try:
+                            # Update user store with active order
+                            updated_user = dict(user_data)
+                            updated_user['active_order'] = order_data
+                            # You'll need to trigger a callback to update user-store here
+                            logger.debug(f"Should update user's active order to: {order_data['id']}")
+                        except Exception as e:
+                            logger.error(f"Error updating user's active order: {e}")
+                    
+                    # Convert items to cart format
+                    cart_items = []
+                    
+                    for item in order_data['items']:
+                        if isinstance(item, dict):
+                            # Handle different formats
+                            if "item_id" in item:
+                                try:
+                                    from app.data.database import get_menu_item_by_id
+                                    menu_item = get_menu_item_by_id(item['item_id'])
+                                    
+                                    if menu_item:
+                                        cart_item = {
+                                            "id": menu_item["id"],
+                                            "name": menu_item["name"],
+                                            "price": menu_item.get("price", 0),
+                                            "quantity": item.get("quantity", 1)
+                                        }
+                                        cart_items.append(cart_item)
+                                    else:
+                                        logger.debug(f"Menu item not found for ID: {item['item_id']}")
+                                except Exception as e:
+                                    logger.error(f"Error getting menu item: {e}")
+                            elif 'id' in item and 'name' in item:
+                                # Already in correct format
+                                cart_items.append(item)
+                            elif 'name' in item:
+                                # Try to find item in menu by name
+                                try:
+                                    from app.data.database import get_menu_items
+                                    menu_items = get_menu_items()
+                                    menu_item = next((mi for mi in menu_items if mi["name"].lower() == item["name"].lower()), None)
+                                    
+                                    if menu_item:
+                                        cart_item = {
+                                            "id": menu_item["id"],
+                                            "name": menu_item["name"],
+                                            "price": menu_item.get("price", 0),
+                                            "quantity": item.get("quantity", 1)
+                                        }
+                                        cart_items.append(cart_item)
+                                except Exception as e:
+                                    logger.error(f"Error finding menu item by name: {e}")
+                    
+                    # If we have cart items, return them
+                    if cart_items:
+                        logger.debug(f"Updating cart with {len(cart_items)} items from order")
+                        
+                        # Create a notification alert
+                        alert = dbc.Alert(
+                            [
+                                html.I(className="fas fa-shopping-cart me-2"),
+                                f"Cart updated from chatbot order! Added {len(cart_items)} items.",
+                                dbc.Button("View Cart", color="light", size="sm", href="/orders", className="ms-2")
+                            ],
+                            color="success",
+                            dismissable=True,
+                            is_open=True,
+                            duration=5000,
+                            className="position-fixed bottom-0 end-0 m-3",
+                            style={"zIndex": 1050, "minWidth": "300px"}
+                        )
+                        
+                        return cart_items, alert
+                
+            except Exception as e:
+                logger.error(f"Error updating cart from Chainlit: {e}")
+        
+        return dash.no_update, dash.no_update
         
     # Add or replace this callback in app/callbacks/order_callbacks.py
 
