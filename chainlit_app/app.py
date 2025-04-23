@@ -14,9 +14,9 @@ from datetime import datetime
 import chainlit as cl
 from chainlit.element import Element
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings
 from langchain.memory import ConversationBufferMemory
-from langchain_community.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain.agents import initialize_agent, Tool
 from langchain.agents import AgentType
 from langchain.schema import SystemMessage, HumanMessage, AIMessage
@@ -38,7 +38,6 @@ logging.basicConfig(
 logger = logging.getLogger('neo_cafe')
 logger.setLevel(logging.DEBUG)
 
-# Add this after imports in both app.py and chainlit_app/app.py
 
 # Add parent directory to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -84,7 +83,7 @@ def init_db():
                   status TEXT,
                   created_at TIMESTAMP)''')
     
-    # Add this new table for order state tracking
+    # Create table for order state tracking
     c.execute('''CREATE TABLE IF NOT EXISTS user_state
                  (session_id TEXT,
                   state_type TEXT,
@@ -1348,9 +1347,11 @@ def query_knowledge_base(query):
 
 def verify_auth_token(token):
     """
-    Verify authentication token with enhanced debugging
+    Verify authentication token with enhanced debugging and users.json lookup
+    
     Args:
         token (str): Authentication token
+    
     Returns:
         tuple: (user_id, is_authenticated, user_data)
     """
@@ -1363,7 +1364,6 @@ def verify_auth_token(token):
     try:
         # First try to decode if it's base64 encoded JSON
         import base64
-        import json
         
         try:
             # Try to decode base64 token - handle potential padding issues
@@ -1377,44 +1377,100 @@ def verify_auth_token(token):
             user_data = json.loads(decoded_bytes)
             
             if isinstance(user_data, dict) and 'username' in user_data:
-                logger.debug(f"Successfully decoded auth token for user: {user_data['username']}")
-                # Also pass the full name if available
+                username = user_data['username']
+                logger.debug(f"Successfully decoded auth token for user: {username}")
+                
+                # Try to get more user data from users.json
+                stored_user_data = get_user_from_file(username)
+                if stored_user_data:
+                    # Merge data from token with data from file
+                    merged_data = {**user_data, **stored_user_data}
+                    logger.debug(f"Enhanced user data with info from users.json")
+                    
+                    # Ensure full_name is set if available
+                    if 'first_name' in merged_data or 'last_name' in merged_data:
+                        full_name = f"{merged_data.get('first_name', '')} {merged_data.get('last_name', '')}".strip()
+                        if full_name:
+                            merged_data['full_name'] = full_name
+                    
+                    return username, True, merged_data
+                
+                # If no stored data, use token data
                 if 'first_name' in user_data or 'last_name' in user_data:
                     full_name = f"{user_data.get('first_name', '')} {user_data.get('last_name', '')}".strip()
                     if full_name:
                         user_data['full_name'] = full_name
-                return user_data['username'], True, user_data
+                
+                return username, True, user_data
         except Exception as decode_err:
             logger.debug(f"Not a base64 token: {str(decode_err)}")
-            
-        # If not base64, check if it's a simple token format
-        if '-' in token:
-            parts = token.split('-')
-            username = parts[0]
-            
-            if username and username != "guest":
-                logger.debug(f"Using simple token format for user: {username}")
-                return username, True, {"username": username}
-                
-        # Last resort: Try API verification
-        try:
-            response = requests.get(
-                f"{DASHBOARD_URL}/api/verify-token",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=3
-            )
-            if response.ok:
-                data = response.json()
-                logger.debug(f"API verified user: {data.get('user_id', 'unknown')}")
-                return data.get("user_id", "guest"), True, data
-        except Exception as api_err:
-            logger.debug(f"API verification failed: {str(api_err)}")
+        
+        # If not base64, try direct username match
+        # This could be just the username coming through
+        direct_user = token
+        stored_user_data = get_user_from_file(direct_user)
+        if stored_user_data:
+            logger.debug(f"Found user via direct username match: {direct_user}")
+            return direct_user, True, stored_user_data
     
     except Exception as e:
         logger.error(f"Auth token verification error: {str(e)}")
         
     logger.debug("Auth verification failed, defaulting to guest")
     return "guest", False, {}
+
+def get_user_from_file(username):
+    """
+    Retrieve user data from users.json file
+    
+    Args:
+        username (str): Username to look for
+        
+    Returns:
+        dict: User data or None if not found
+    """
+    try:
+        # Look for users.json in multiple possible locations
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        possible_paths = [
+            os.path.join(base_dir, 'app', 'data', 'seed_data', 'users.json'),
+            os.path.join(base_dir, 'data', 'seed_data', 'users.json'),
+            os.path.join(base_dir, 'app', 'data', 'users.json')
+        ]
+        
+        users_file = None
+        for path in possible_paths:
+            if os.path.exists(path):
+                users_file = path
+                break
+        
+        if not users_file:
+            logger.warning(f"Users file not found in any standard location")
+            return None
+        
+        logger.debug(f"Reading user data from: {users_file}")
+        with open(users_file, 'r') as f:
+            users = json.load(f)
+        
+        # Log available usernames for debugging
+        usernames = [user.get('username') for user in users if 'username' in user]
+        logger.debug(f"Available users: {usernames}")
+        
+        # Find the user by username (case-insensitive match)
+        for user in users:
+            if user.get('username', '').lower() == username.lower():
+                # Remove sensitive data
+                user_data = {k: v for k, v in user.items() if k != 'password_hash'}
+                logger.debug(f"Found user in users.json: {username}")
+                return user_data
+        
+        logger.warning(f"User not found in users.json: {username}")
+        return None
+    except Exception as e:
+        logger.error(f"Error reading users.json: {e}")
+        traceback.print_exc()
+        return None
+
 
 def load_conversation_history(session_id):
     """
@@ -1790,35 +1846,20 @@ def get_personalized_welcome(context):
     return greeting + page_specific + order_content
 
 # ----- Chainlit Handlers -----
+
 @cl.on_chat_start
 async def start():
     """Initialize chat session with persistent user data"""
     # Initialize order tracking
     cl.user_session.set("order_in_progress", None)
     
-    # Get URL query parameters safely - with better error handling
+    # Get URL query parameters
     try:
         url_query = ""
-        # First try the new way (safer)
         if hasattr(cl.context, 'request') and hasattr(cl.context.request, 'query_string'):
             url_query = cl.context.request.query_string.decode('utf-8')
             logger.debug(f"URL query from request: {url_query}")
-        # Fallback to session dict
-        elif hasattr(cl.context, 'session') and isinstance(cl.context.session, dict):
-            url_query = cl.context.session.get('url_query', '')
-            logger.debug(f"URL query from session dict: {url_query}")
-        # Final fallback in case session is an object with get method
-        elif hasattr(cl.context, 'session') and hasattr(cl.context.session, 'get'):
-            try:
-                url_query = cl.context.session.get('url_query')
-                logger.debug(f"URL query from session object (1 arg): {url_query}")
-            except TypeError:
-                logger.debug("Session.get() caused TypeError, trying alternate access")
-                if hasattr(cl.context.session, '__dict__'):
-                    url_query = cl.context.session.__dict__.get('url_query', '')
-                    logger.debug(f"URL query from session.__dict__: {url_query}")
-        logger.debug(f"Final URL query: {url_query}")
-
+        
         query_dict = {}
         if url_query:
             query_dict = urllib.parse.parse_qs(url_query)
@@ -1828,90 +1869,69 @@ async def start():
         query_dict = {}
 
     # Extract session_id and user parameters
-    session_id = query_dict.get('session_id', [str(uuid.uuid4())])[0]
+    session_id = query_dict.get('session_id', [None])[0]
     auth_token = query_dict.get('token', [None])[0]
     direct_user = query_dict.get('user', [None])[0]
     
-    # First check if we have a session_id and user_id match in the database
-    if direct_user:
-        existing_session = get_user_session(direct_user)
-        if existing_session:
-            logger.debug(f"Found existing session for user: {direct_user}")
-            context = existing_session.get('context', {})
-            
-            # Update context with current page and session
-            context.update({
-                "current_page": query_dict.get('tab', ['home'])[0],
-                "session_id": session_id,
-                "is_floating": query_dict.get('floating', ['false'])[0].lower() == 'true'
-            })
-            
-            # Store the context
-            cl.user_session.set("context", context)
-            logger.debug(f"Loaded user context from database: {context}")
-            
-            # Set up the agent
-            try:
-                agent = initialize_agent_safely(context)
-                if agent:
-                    cl.user_session.set("agent", agent)
-                    logger.debug("Agent setup complete with existing user context")
-                else:
-                    logger.warning("Agent initialization failed, using fallback responses")
-            except Exception as e:
-                logger.error(f"Error setting up agent: {e}")
-            
-            # Send personalized welcome
-            try:
-                full_name = context.get('full_name', '')
-                username = context.get('username', '')
-                welcome_msg = ""
-                
-                if full_name:
-                    welcome_msg = f"Welcome back, {full_name}! How can I assist you today?"
-                elif username:
-                    welcome_msg = f"Welcome back, {username}! How can I assist you today?"
-                else:
-                    welcome_msg = "Welcome to Neo Cafe! How can I help you today?"
-                
-                # Add order info if available
-                order_id = query_dict.get('order_id', [None])[0]
-                if order_id or context.get('active_order'):
-                    active_order_id = order_id or context.get('active_order', {}).get('id')
-                    if active_order_id:
-                        welcome_msg += f"\n\nI see you have an active order (#{active_order_id}). Would you like to check its status?"
-                
-                logger.debug(f"Sending welcome message: {welcome_msg}")
-                await cl.Message(content=welcome_msg).send()
-                
-                # Return early since we've handled everything
-                return
-                
-            except Exception as e:
-                logger.error(f"Error sending welcome message: {e}")
+    # IMPORTANT: First check for existing session in database
+    # This helps maintain authentication across page reloads
+    persisted_session_id, persisted_user_id, persisted_data, persisted_auth = get_persisted_auth()
     
-    # If we don't have an existing session, or something failed, proceed with normal initialization
-    # This is your original authentication logic
+    # Use persisted data as a fallback if URL doesn't have auth info
+    if not session_id:
+        session_id = persisted_session_id
+        logger.debug(f"Using persisted session ID: {session_id}")
+    
+    if not direct_user and not auth_token and persisted_auth:
+        direct_user = persisted_user_id
+        logger.debug(f"Using persisted user ID: {direct_user}")
+
+    # Verify token if present
     user_id, is_authenticated, user_data = "guest", False, {}
     
-    # Verify token if present
     if auth_token:
         try:
             user_id, is_authenticated, user_data = verify_auth_token(auth_token)
+            logger.debug(f"Token verification result: user={user_id}, auth={is_authenticated}")
         except Exception as e:
             logger.error(f"Error verifying auth token: {e}")
+            
+            # Fall back to persisted data if token verification fails
+            if persisted_auth:
+                user_id = persisted_user_id
+                is_authenticated = True
+                user_data = persisted_data
+                logger.debug(f"Falling back to persisted data for user: {user_id}")
     
-    # Fallback to direct user if provided
+    # Fall back to direct user if provided and token auth failed
     if not is_authenticated and direct_user:
         user_id = direct_user
-        is_authenticated = True
-        user_data = {"username": user_id}
-        logger.debug(f"Using direct username as fallback: {user_id}")
+        # Try to get user data from users.json
+        stored_user_data = get_user_from_file(direct_user)
+        if stored_user_data:
+            user_data = stored_user_data
+            is_authenticated = True
+            logger.debug(f"Found user data for {direct_user} in users.json")
+        elif persisted_auth and persisted_user_id == direct_user:
+            # Fall back to persisted data if matching user
+            user_data = persisted_data
+            is_authenticated = True
+            logger.debug(f"Using persisted data for user: {direct_user}")
+        else:
+            # Basic info if not in users.json or persisted
+            user_data = {"username": user_id}
+            is_authenticated = True
+        
+        logger.debug(f"Using direct username: {user_id}")
     
-    logger.debug(f"Authentication result: user_id={user_id}, authenticated={is_authenticated}")
-    logger.debug(f"User data: {user_data}")
-
-    # Build enhanced context
+    # Use persisted data as final fallback
+    if not is_authenticated and persisted_auth:
+        user_id = persisted_user_id
+        user_data = persisted_data
+        is_authenticated = True
+        logger.debug(f"Using persisted auth as final fallback: {user_id}")
+    
+    # Build context
     context = {
         "current_page": query_dict.get('tab', ['home'])[0],
         "user_id": user_id,
@@ -1953,19 +1973,24 @@ async def start():
     # Send personalized welcome
     try:
         welcome_msg = ""
-        if is_authenticated and context.get('full_name'):
-            welcome_msg = f"Welcome back, {context['full_name']}! How can I assist you today?"
-        elif is_authenticated:
-            welcome_msg = f"Welcome back, {context['username']}! How can I assist you today?"
+        if is_authenticated:
+            if context.get('full_name'):
+                welcome_msg = f"Welcome back, {context['full_name']}! How can I assist you today?"
+            else:
+                welcome_msg = f"Welcome back, {context['username']}! How can I assist you today?"
         else:
             welcome_msg = "Welcome to Neo Cafe! How can I help you today?"
+            
         if order_id:
             welcome_msg += f"\n\nI see you have an active order (#{order_id}). Would you like to check its status?"
+            
         logger.debug(f"Sending welcome message: {welcome_msg}")
         await cl.Message(content=welcome_msg).send()
     except Exception as e:
         logger.error(f"Error sending welcome message: {e}")
         await cl.Message(content="Welcome to Neo Cafe! How can I help you today?").send()
+
+
 
 @cl.on_window_message
 async def handle_window_message(message):
@@ -2724,6 +2749,51 @@ def restore_order_state():
         print(f"Error restoring order state: {e}")
     
     return False
+
+def get_persisted_auth():
+    """
+    Get persisted authentication info from database
+    
+    Returns:
+        tuple: (session_id, user_id, user_data, is_authenticated)
+    """
+    try:
+        # First try to get auth from current request
+        if hasattr(cl.context, 'request'):
+            cookies = getattr(cl.context.request, 'cookies', {})
+            if hasattr(cookies, 'get'):
+                session_id = cookies.get('session_id')
+                auth_token = cookies.get('auth_token')
+                
+                if session_id and auth_token:
+                    logger.debug(f"Found auth in cookies: {session_id}")
+                    user_id, is_auth, user_data = verify_auth_token(auth_token)
+                    if is_auth:
+                        return session_id, user_id, user_data, is_auth
+        
+        # If no session in cookies, check database for active sessions
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        # Get most recent active session
+        c.execute('''SELECT user_id, context FROM user_sessions
+                     ORDER BY last_active DESC LIMIT 1''')
+        result = c.fetchone()
+        conn.close()
+        
+        if result:
+            user_id, context_json = result
+            try:
+                context = json.loads(context_json)
+                logger.debug(f"Found persisted session for user: {user_id}")
+                return context.get('session_id', str(uuid.uuid4())), user_id, context, True
+            except:
+                logger.warning(f"Invalid context JSON for user: {user_id}")
+                
+    except Exception as e:
+        logger.error(f"Error getting persisted auth: {e}")
+    
+    return str(uuid.uuid4()), "guest", {}, False
 
 @cl.set_starters
 async def set_starters():

@@ -1,3 +1,5 @@
+<!-- This HTML file is used to embed the Chainlit chat interface in a web page. It includes authentication handling, message passing, and loading indicators. -->
+<!-- The code is designed to be responsive and works in both floating and full-screen contexts. It also includes error handling for iframe loading issues. -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -77,7 +79,7 @@
     </div>
     
     <script>
-        // For debugging
+        // For debugging - combined from both files
         const DEBUG = window.DEBUG_MODE || true;
         
         function debugLog(...args) {
@@ -86,92 +88,120 @@
             }
         }
         
-        // Extract token from URL for debugging
-        function extractAndLogToken() {
+        // Combined authentication setup from both versions
+        function setupAuthentication() {
             const urlParams = new URLSearchParams(window.location.search);
-            const token = urlParams.get('token');
-            const user = urlParams.get('user');
+            let token = urlParams.get('token');
+            let user = urlParams.get('user');
             
-            if (token) {
-                debugLog(`Token present in URL (first 20 chars): ${token.substring(0, 20)}...`);
-            } else {
-                debugLog('No token found in URL');
-            }
-            
-            if (user) {
-                debugLog(`User present in URL: ${user}`);
-            } else {
-                debugLog('No user param found in URL');
-            }
-            
-            // Add token to local storage for backup
-            if (token) {
-                localStorage.setItem('chainlit_auth_token', token);
-            }
-            if (user) {
-                localStorage.setItem('chainlit_user', user);
-            }
-        }
-        
-        debugLog('Initializing Chainlit embed');
-        extractAndLogToken(); // Call this function right after the debugging code
-
-        // Add this right after the extractAndLogToken function
-        function addTokenToChildMessages() {
-            const iframe = document.getElementById('chatframe');
-            const urlParams = new URLSearchParams(window.location.search);
-            const token = urlParams.get('token');
-            const user = urlParams.get('user');
-            
-            if (!iframe || !iframe.contentWindow) return;
-            
-            // Create messaging interval - keeps trying to pass user info to the iframe
-            const messagingInterval = setInterval(() => {
-                try {
-                    // Send credentials to iframe
-                    let credentials = {};
-                    if (token) credentials.token = token;
-                    if (user) credentials.user = user;
+            // If token/user not in URL, try to get from parent window
+            if ((!token || !user) && window.parent !== window) {
+                debugLog('Token/user not found in URL, trying parent window');
+                
+                // Check localStorage first
+                if (window.localStorage) {
+                    const storedToken = localStorage.getItem('auth_token');
+                    const storedUser = localStorage.getItem('auth_user');
                     
-                    if (Object.keys(credentials).length > 0) {
-                        debugLog('Sending credentials to iframe');
-                        iframe.contentWindow.postMessage({
-                            type: 'auth_credentials',
-                            credentials: credentials
-                        }, '*');
-                        
-                        // Also try standard communication format
-                        iframe.contentWindow.postMessage({
-                            type: 'credentials',
-                            token: token,
-                            user: user
-                        }, '*');
-                    }
-                } catch (e) {
-                    debugLog('Error sending credentials to iframe:', e);
+                    if (storedToken) token = storedToken;
+                    if (storedUser) user = storedUser;
+                    
+                    debugLog('Found in localStorage:', { token: !!token, user });
                 }
-            }, 2000); // Try every 2 seconds
+                
+                // Request from parent window
+                try {
+                    window.parent.postMessage({ type: 'request_auth_data' }, '*');
+                    debugLog('Requested auth data from parent window');
+                } catch (e) {
+                    debugLog('Error requesting auth data from parent:', e);
+                }
+            }
             
-            // Clear interval after 30 seconds (should be authenticated by then)
-            setTimeout(() => clearInterval(messagingInterval), 30000);
+            // Log token details
+            if (token) {
+                debugLog(`Token present (first 20 chars): ${token.substring(0, 20)}...`);
+                if (window.localStorage) {
+                    localStorage.setItem('chainlit_auth_token', token);
+                }
+            }
+            
+            if (user) {
+                debugLog(`User present: ${user}`);
+                if (window.localStorage) {
+                    localStorage.setItem('chainlit_user', user);
+                }
+            }
+            
+            // Listen for auth data from parent
+            window.addEventListener('message', function(event) {
+                if (event.source === window.parent && event.data && event.data.type === 'auth_data') {
+                    debugLog('Received auth data from parent:', event.data);
+                    token = event.data.token || token;
+                    user = event.data.user || user;
+                    passAuthToChainlit(token, user);
+                }
+            });
+            
+            return { token, user };
         }
 
-        // Check if we're in a floating context
-        const isFloating = window.frameElement && 
-                          (window.frameElement.id === 'floating-chainlit-frame');
-        
-        // Add appropriate class to body
-        if (isFloating) {
-            document.body.classList.add('floating-context');
-            debugLog('Running in floating context');
+        // Enhanced auth passing function from both versions
+        function passAuthToChainlit(token, user) {
+            const iframe = document.getElementById('chatframe');
+            if (!iframe || !iframe.contentWindow) {
+                debugLog('Iframe not accessible yet');
+                setTimeout(() => passAuthToChainlit(token, user), 1000);
+                return;
+            }
+            
+            try {
+                debugLog('Sending credentials to Chainlit iframe');
+                
+                // Send in multiple formats
+                const authData = {
+                    type: 'auth_credentials',
+                    credentials: { token, user },
+                    auth_update: {
+                        token: token,
+                        user: user,
+                        auth_status: true
+                    }
+                };
+                
+                // Send using different message types
+                iframe.contentWindow.postMessage(authData, '*');
+                iframe.contentWindow.postMessage({
+                    type: 'credentials',
+                    token: token,
+                    user: user
+                }, '*');
+                
+            } catch (e) {
+                debugLog('Error sending auth to iframe:', e);
+            }
         }
-        
-        // Track iframe load status
+
+        // Combined persistent auth setup
+        function setupPersistentAuth(token, user) {
+            if (!token && !user) return;
+            
+            // Immediate attempt
+            passAuthToChainlit(token, user);
+            
+            // Periodic attempts
+            const authInterval = setInterval(() => {
+                passAuthToChainlit(token, user);
+            }, 3000);
+            
+            // Stop after 30 seconds
+            setTimeout(() => clearInterval(authInterval), 30000);
+        }
+
+        // Enhanced message handling from both versions
         let iframeLoaded = false;
-        let frameLoadTimeout = null;
         let messageQueue = [];
         
-        // Function to send message to Chainlit
         function sendToChainlit(message) {
             debugLog('Sending to Chainlit:', message);
             
@@ -182,7 +212,6 @@
                 return false;
             }
             
-            // If iframe isn't loaded yet, queue the message
             if (!iframeLoaded) {
                 debugLog('Iframe not loaded, queueing message');
                 messageQueue.push(message);
@@ -190,115 +219,103 @@
             }
             
             try {
-                // Try multiple message formats to be comprehensive
-                
-                // Format 1 - Standard Chainlit format
+                // Send in multiple formats
                 iframe.contentWindow.postMessage({
                     type: 'userMessage',
                     message: message
                 }, '*');
                 
-                // Format 2 - Another possible Chainlit format
                 iframe.contentWindow.postMessage({
                     kind: 'user_message',
-                    data: {
-                        content: message
-                    }
+                    data: { content: message }
                 }, '*');
                 
-                // Format 3 - Simple message
                 iframe.contentWindow.postMessage(message, '*');
                 
-                debugLog('Message sent via postMessage (multiple formats)');
                 return true;
             } catch (e) {
-                debugLog('Error sending via postMessage:', e);
+                debugLog('Error sending message:', e);
                 return false;
             }
         }
-        
-        // Process any queued messages
+
+        // Message queue processing
         function processMessageQueue() {
             if (messageQueue.length > 0) {
                 debugLog(`Processing ${messageQueue.length} queued messages`);
-                
-                // Make a copy of the queue and clear it
                 const queueCopy = [...messageQueue];
                 messageQueue = [];
-                
-                // Process each message in the queue
-                queueCopy.forEach(message => {
-                    sendToChainlit(message);
-                });
+                queueCopy.forEach(message => sendToChainlit(message));
             }
         }
-        
-        // Handle direct messages from the parent window
+
+        // Main initialization
+        document.addEventListener('DOMContentLoaded', function() {
+            debugLog('Chainlit embed initializing');
+            
+            // Setup authentication
+            const { token, user } = setupAuthentication();
+            setupPersistentAuth(token, user);
+            
+            // Check context
+            const isFloating = window.frameElement && 
+                             (window.frameElement.id === 'floating-chainlit-frame');
+            if (isFloating) {
+                document.body.classList.add('floating-context');
+                debugLog('Running in floating context');
+            }
+
+            // Iframe load handler
+            document.getElementById('chatframe').onload = function() {
+                debugLog('Chainlit iframe loaded');
+                iframeLoaded = true;
+                
+                // Update UI
+                document.getElementById('loading-indicator').style.display = 'none';
+                document.getElementById('error-message').style.display = 'none';
+                
+                // Notify parent
+                window.parent.postMessage({type: 'iframe_ready'}, '*');
+                
+                // Process queue
+                setTimeout(processMessageQueue, 1000);
+            };
+
+            // Load timeout
+            setTimeout(function() {
+                if (!iframeLoaded) {
+                    debugLog('Iframe load timeout');
+                    document.getElementById('error-message').style.display = 'block';
+                    document.getElementById('loading-indicator').style.display = 'none';
+                }
+            }, 15000);
+        });
+
+        // Parent message handler
         window.addEventListener('message', function(event) {
-            // Only accept messages from the parent window
             if (event.source === window.parent) {
-                debugLog('Received message from parent:', event.data);
+                debugLog('Parent message:', event.data);
                 
-                // Check if it's a direct message - handle multiple formats
                 const messageData = event.data;
-                
                 let message = null;
+                
                 if (typeof messageData === 'string') {
                     message = messageData;
                 } else if (messageData) {
-                    // Extract message from various possible formats
                     if (messageData.message) {
                         message = messageData.message;
-                    } else if (messageData.type === 'direct_message' || messageData.type === 'userMessage') {
+                    } else if (messageData.type === 'direct_message') {
                         message = messageData.message;
-                    } else if (messageData.kind === 'user_message' && messageData.data) {
+                    } else if (messageData.kind === 'user_message') {
                         message = messageData.data.content;
                     }
                 }
                 
-                if (message) {
-                    debugLog('Processing direct message:', message);
-                    sendToChainlit(message);
-                }
+                if (message) sendToChainlit(message);
             }
         });
-        
-        // Handle iframe load event
-        document.getElementById('chatframe').onload = function() {
-            debugLog('Chainlit iframe loaded');
-            iframeLoaded = true;
-            
-            // Hide loading indicator
-            document.getElementById('loading-indicator').style.display = 'none';
-            
-            // Clear timeout if it exists
-            if (frameLoadTimeout) {
-                clearTimeout(frameLoadTimeout);
-            }
-            
-            // Hide error message if shown
-            document.getElementById('error-message').style.display = 'none';
-            
-            // Let the parent know we're ready
-            window.parent.postMessage({type: 'iframe_ready'}, '*');
-            
-            // Start sending credentials to the iframe
-            addTokenToChildMessages();
-            
-            // Process any queued messages
-            setTimeout(processMessageQueue, 1000);
-        };
-        
-        // Set timeout to check if iframe loads
-        frameLoadTimeout = setTimeout(function() {
-            if (!iframeLoaded) {
-                debugLog('Iframe failed to load in time');
-                document.getElementById('error-message').style.display = 'block';
-                document.getElementById('loading-indicator').style.display = 'none';
-            }
-        }, 15000); // 15 second timeout
-        
-        // Create global function for direct access
+
+        // Global access
         window.sendMessage = sendToChainlit;
     </script>
 </body>

@@ -28,7 +28,7 @@ logger = logging.getLogger('neo_cafe')
 logger.setLevel(logging.DEBUG)
 
 # Base URLs for APIs
-CHAINLIT_URL = os.environ.get('CHAINLIT_URL', 'http://localhost:8001')
+CHAINLIT_URL = os.environ.get('CHAINLIT_URL', 'http://localhost:8000')
 
 def register_callbacks(app, socketio):
     """
@@ -40,7 +40,7 @@ def register_callbacks(app, socketio):
     """
     @app.callback(
     Output('chat-message-listener', 'children', allow_duplicate=True),
-    [Input('socket-chat-update', 'data')],  # Changed from 'children' to 'data'
+    [Input('socket-chat-update', 'data')],  
     prevent_initial_call=True
 )
     def update_chat_listener_from_socket(socket_data):
@@ -291,13 +291,13 @@ def register_callbacks(app, socketio):
     Output('floating-chainlit-frame', 'src'),
     [
         Input('floating-chat-panel', 'style'),
-        Input('url', 'pathname')
+        Input('url', 'pathname'),
+        Input('user-store', 'data')  # Added user-store as input
     ],
-    [State('user-store', 'data'), 
-     State('floating-chainlit-frame', 'src')]
-    )
+    [State('floating-chainlit-frame', 'src')]
+)
     def update_floating_chat_frame(panel_style, pathname, user_data, current_src):
-        """Update the Chainlit iframe source with correct parameters"""
+        """Update the Chainlit iframe source with correct parameters including auth"""
         ctx = callback_context
         trigger = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
         
@@ -305,7 +305,7 @@ def register_callbacks(app, socketio):
         if not panel_style or panel_style.get("display") == "none":
             if trigger == 'url':
                 return dash.no_update  # Don't update on page change if panel is hidden
-            
+                
         # Base query parameters
         query_params = {}
         
@@ -326,7 +326,7 @@ def register_callbacks(app, socketio):
         # Add floating flag
         query_params['floating'] = 'true'
         
-        # Enhanced user info
+        # Enhanced user info with token for authentication persistence
         if user_data and 'username' in user_data:
             query_params['user'] = user_data['username']
             
@@ -364,15 +364,12 @@ def register_callbacks(app, socketio):
         
         # Build query string
         query_string = urllib.parse.urlencode(query_params)
-        
-        # Build full URL
+        #=====================================================
         if query_string:
-            src_url = f"{CHAINLIT_URL}?{query_string}"
+            return f"{CHAINLIT_URL}/?{query_string}"
         else:
-            src_url = CHAINLIT_URL
-        
-        print(f"Setting Chainlit iframe src: {src_url}")
-        return src_url
+            return f"{CHAINLIT_URL}/"
+        #=====================================================
 
     @app.callback(
         Output('chat-action-trigger', 'children'),

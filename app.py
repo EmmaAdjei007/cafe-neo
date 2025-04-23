@@ -76,6 +76,7 @@ external_scripts = [
     '/assets/js/chat_client.js',  # Add chat client JS
     'assets/js/direct_message_handler.js',  # Add direct message handler JS
     '/assets/js/chat_messenger.js',  # Add chat messenger JS
+    '/assets/js/auth_bridge.js',  # Add auth bridge JS
 ]
 
 app = Dash(__name__, 
@@ -92,9 +93,6 @@ app.title = "Neo Cafe - Give me coffee or give me death"
 logger.info("Initializing Neo Cafe Dashboard")
 logger.info(f"Chainlit URL: {CHAINLIT_URL}")
 
-
-# Add this to app.py before the layout definition
-# This adds chat persistence through page navigation
 
 # Add this JavaScript to the index_string for chat persistence
 chat_persistence_js = '''
@@ -194,7 +192,6 @@ app.layout = create_main_layout()
 # Register all callbacks
 register_order_update_callback(app)
 register_all_callbacks(app, socketio)
-
 
 
 # This is now handled by run_with_eventlet.py

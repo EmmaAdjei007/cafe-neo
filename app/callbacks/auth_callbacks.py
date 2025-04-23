@@ -5,6 +5,9 @@ import dash_bootstrap_components as dbc
 import json
 from app.utils.auth_utils import validate_login, register_user, get_user_profile, hash_password
 
+import logging
+logger = logging.getLogger(__name__)
+
 def register_callbacks(app):
     """
     Register callbacks for authentication
@@ -21,30 +24,48 @@ def register_callbacks(app):
 )
     def update_chat_auth(user_data):
         """Pass authentication data to chat when user logs in"""
+        if not user_data:
+            return dash.no_update
         
-        return user_data
-        # if not user_data:
-        #     return dash.no_update
-        
-        # try:
-        #     # If we have user data, try to notify the chat component
-        #     if 'username' in user_data:
-        #         # Try to notify via stored socket connection
-        #         if hasattr(app, 'socketio'):
-        #             app.socketio.emit('auth_update', {
-        #                 'username': user_data['username'],
-        #                 'user_id': user_data.get('id', ''),
-        #                 'auth_status': True
-        #             })
+        try:
+            # If we have user data, try to notify the chat component
+            if 'username' in user_data:
+                logger.debug(f"Auth update triggered for user: {user_data['username']}")
                 
-        #         print(f"Auth update sent to chat for user: {user_data['username']}")
+                # Create a token with user data
+                token_data = {
+                    "username": user_data['username'],
+                    "id": user_data.get('id', ''),
+                    "email": user_data.get('email', ''),
+                    "first_name": user_data.get('first_name', ''),
+                    "last_name": user_data.get('last_name', '')
+                }
                 
-        #         # Return user data for client-side handling
-        #         return user_data
-        # except Exception as e:
-        #     print(f"Error updating chat auth: {e}")
+                import base64
+                import json
+                token = base64.b64encode(json.dumps(token_data).encode()).decode()
+                
+                # Create auth data for socket.io
+                auth_data = {
+                    'type': 'auth_update',
+                    'user': user_data['username'],
+                    'user_id': user_data.get('id', ''),
+                    'auth_status': True,
+                    'token': token
+                }
+                
+                # Try to emit via socket connection
+                if hasattr(app, 'socketio'):
+                    app.socketio.emit('auth_update', auth_data)
+                    logger.debug(f"Auth update sent via socket.io for user: {user_data['username']}")
+                
+                # Return the auth data for other mechanisms
+                return auth_data
+                
+        except Exception as e:
+            logger.error(f"Error updating chat auth: {e}")
         
-        # return dash.no_update
+        return dash.no_update
 
     @app.callback(
     Output("user-store", "data", allow_duplicate=True),

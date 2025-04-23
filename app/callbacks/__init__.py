@@ -16,7 +16,6 @@ def register_all_callbacks(app, socketio):
     from app.callbacks.order_callbacks import register_callbacks as register_orders
     from app.callbacks.delivery_callbacks import register_callbacks as register_delivery
     from app.callbacks.chat_callbacks import register_callbacks as register_chat
-    #==============================================================================
     from app.callbacks.direct_button_callbacks import register_callbacks as register_direct_buttons
     
     # Register all callback modules with the app
@@ -30,7 +29,6 @@ def register_all_callbacks(app, socketio):
     
     # Register SocketIO event handlers
     register_socketio_handlers(socketio)
-    #==============================================================================
     register_direct_buttons(app, socketio)
     
     print("All callbacks registered successfully!")
@@ -48,7 +46,6 @@ def register_socketio_handlers(socketio):
         """Handle client connection"""
         print('Client connected')
     
-    # Fix: Add the sid parameter to handle_disconnect
     @socketio.on('disconnect')
     def handle_disconnect():
         """Handle client disconnection"""
