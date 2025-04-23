@@ -35,7 +35,7 @@ def configure_server(server, socketio):
         Handle cart update events from Chainlit
         
         Args:
-            data (dict): Cart data with items
+            data (dict): Cart data with items and order details
         """
         try:
             print(f"Cart update received: {data}")
@@ -45,6 +45,14 @@ def configure_server(server, socketio):
                 print(f"Invalid cart data format: {type(data)}")
                 return {"status": "error", "message": "Invalid data format"}
             
+            # Log additional fields for debugging
+            if 'payment_method' in data:
+                print(f"Payment method from Chainlit: {data['payment_method']}")
+            if 'delivery_location' in data:
+                print(f"Delivery location from Chainlit: {data['delivery_location']}")
+            if 'delivery_type' in data:
+                print(f"Delivery type from Chainlit: {data['delivery_type']}")
+            
             # Broadcast the cart update to all clients
             socketio.emit('cart_update', data)
             
@@ -53,7 +61,6 @@ def configure_server(server, socketio):
         except Exception as e:
             print(f"Error handling cart update: {e}")
             return {"status": "error", "message": str(e)}
-
 
     @server.route('/chainlit-status', methods=['GET'])
     def chainlit_status():

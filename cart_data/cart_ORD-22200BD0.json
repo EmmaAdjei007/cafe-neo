@@ -1,0 +1,13 @@
+{
+  "type": "cart_update",
+  "items": [
+    {
+      "id": 1,
+      "name": "Espresso",
+      "price": 2.95,
+      "quantity": 1,
+      "special_instructions": ""
+    }
+  ],
+  "order_id": "ORD-22200BD0"
+}

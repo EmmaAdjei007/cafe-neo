@@ -77,10 +77,15 @@ def register_callbacks(app, socketio):
                                 "quantity": item.get('quantity', 1),
                                 "special_instructions": item.get('special_instructions', '')
                             })
-                
+                # Extract order details
+                payment_method = cart_data.get('payment_method', 'Credit Card')
+                delivery_location = cart_data.get('delivery_location', 'Table 1')
+                special_instructions = cart_data.get('special_instructions', '')
+
                 if new_cart_items:
                     logger.debug(f"Updating cart with {len(new_cart_items)} items from Chainlit")
-                    
+                    logger.debug(f"Setting payment to {payment_method}, location to {delivery_location}")
+
                     # Create a notification alert
                     alert = dbc.Alert(
                         [
@@ -96,7 +101,7 @@ def register_callbacks(app, socketio):
                         style={"zIndex": 1050, "minWidth": "300px"}
                     )
                     
-                    return new_cart_items, alert
+                    return new_cart_items, alert, delivery_location, payment_method, special_instructions
             
             except Exception as e:
                 logger.error(f"Error updating cart from cart update: {e}")

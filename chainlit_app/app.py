@@ -298,48 +298,112 @@ class OrderManager:
             # Step 1: Better input handling for various formats
             print(f"Original order data: {order_data}")
             
+            # Check for confirmation messages
+            if isinstance(order_data, str):
+                # Check for confirmation phrases
+                confirmation_phrases = [
+                    "that's all", "thats all", "nothing else", "finalize", "place order",
+                    "confirm", "that is all", "looks good", "proceed", "yes", "complete",
+                    "finish", "done", "good to go", "fine", "perfect", "correct", "ok", 
+                    "okay", "sure", "yeah", "yep", "sounds good", "just that", "that's it",
+                    "that will be it", "finalize it", "that's correct"
+                ]
+                
+                order_data_lower = order_data.lower().strip()
+                if any(phrase == order_data_lower or phrase in order_data_lower for phrase in confirmation_phrases) and len(order_data_lower.split()) <= 6:
+                    print("Detected confirmation message, returning verification status")
+                    return {
+                        "status": "confirmation_only",
+                        "message": "Please confirm that you want to finalize your order as is.",
+                        "order_so_far": None
+                    }
+                    
+            # Continue with normal parsing logic
             if isinstance(order_data, str):
                 try:
                     # Try to parse as JSON first
                     order_data = json.loads(order_data)
                     print(f"Parsed order data from JSON: {order_data}")
+                    
+                    # Map 'location' or 'address' to 'delivery_location' if needed
+                    if 'location' in order_data and 'delivery_location' not in order_data:
+                        order_data['delivery_location'] = order_data['location']
+                        print(f"Mapped location field to delivery_location: {order_data['delivery_location']}")
+                    elif 'address' in order_data and 'delivery_location' not in order_data:
+                        order_data['delivery_location'] = order_data['address']
+                        print(f"Mapped address field to delivery_location: {order_data['delivery_location']}")
                 except json.JSONDecodeError:
                     # If not valid JSON, try to parse as text
                     try:
-                        order_data = parse_order_text(order_data)
+                        parsed_data = parse_order_text(order_data)
+                        
+                        # Check if this was just a confirmation message
+                        if isinstance(parsed_data, dict) and parsed_data.get("is_confirmation", False):
+                            print("Parse_order_text detected confirmation-only message")
+                            return {
+                                "status": "confirmation_only",
+                                "message": "Please confirm that you want to finalize your order as is.",
+                                "order_so_far": None
+                            }
+                        
+                        # Normal parsed order data
+                        order_data = parsed_data
                         print(f"Parsed order data from text: {order_data}")
+                        
                     except Exception as parse_err:
                         print(f"Error in text parsing: {parse_err}")
                         # Additional fallback - try to extract menu items directly
                         items = []
                         text_lower = order_data.lower()
                         
-                        # Check for common menu items
-                        for menu_item in menu_items:
-                            item_name_lower = menu_item["name"].lower()
-                            if item_name_lower in text_lower:
-                                # Try to find quantity
-                                quantity = 1
-                                for i in range(1, 10):  # Look for numbers 1-9
-                                    if f"{i} {item_name_lower}" in text_lower or f"{i}{item_name_lower}" in text_lower:
-                                        quantity = i
-                                        break
+                        # Special handling for "classic latte" in direct text
+                        if "classic latte" in text_lower:
+                            # Find latte in menu
+                            latte_item = None
+                            for menu_item in menu_items:
+                                if menu_item["name"].lower() == "latte":
+                                    latte_item = menu_item
+                                    break
+                            
+                            if latte_item:
+                                # Create a special order for classic latte
+                                order_data = {
+                                    "items": [{
+                                        "item_id": latte_item["id"],
+                                        "quantity": 1,
+                                        "special_instructions": "Classic style"
+                                    }],
+                                    "user_id": "guest",
+                                    "delivery_type": ""  # Empty to trigger the conversation flow
+                                }
+                                print(f"Created special classic latte order: {order_data}")
+                            else:
+                                # Check for common menu items
+                                for menu_item in menu_items:
+                                    item_name_lower = menu_item["name"].lower()
+                                    if item_name_lower in text_lower:
+                                        # Try to find quantity
+                                        quantity = 1
+                                        for i in range(1, 10):  # Look for numbers 1-9
+                                            if f"{i} {item_name_lower}" in text_lower or f"{i}{item_name_lower}" in text_lower:
+                                                quantity = i
+                                                break
+                                        
+                                        items.append({
+                                            "item_id": menu_item["id"],
+                                            "quantity": quantity,
+                                            "special_instructions": ""
+                                        })
+                                        print(f"Found item in text: {menu_item['name']}, quantity: {quantity}")
                                 
-                                items.append({
-                                    "item_id": menu_item["id"],
-                                    "quantity": quantity,
-                                    "special_instructions": ""
-                                })
-                                print(f"Found item in text: {menu_item['name']}, quantity: {quantity}")
-                        
-                        if items:
-                            order_data = {
-                                "items": items,
-                                "user_id": "guest",
-                                "delivery_type": ""  # Empty to trigger the conversation flow
-                            }
-                        else:
-                            raise ValueError("No menu items found in text and couldn't parse as JSON")
+                                if items:
+                                    order_data = {
+                                        "items": items,
+                                        "user_id": "guest",
+                                        "delivery_type": ""  # Empty to trigger the conversation flow
+                                    }
+                                else:
+                                    raise ValueError("No menu items found in text and couldn't parse as JSON")
             
             # Step 2: Check for required details
             # Check for items first
@@ -367,24 +431,94 @@ class OrderManager:
                         })
                     elif "name" in item:
                         # Find item by name
+                        found = False
                         for menu_item in menu_items:
-                            if menu_item["name"].lower() == item["name"].lower():
+                            # Handle "Classic Latte" case specially
+                            if "classic" in item["name"].lower() and "latte" in item["name"].lower() and menu_item["name"].lower() == "latte":
+                                standardized_items.append({
+                                    "item_id": menu_item["id"],
+                                    "quantity": item.get("quantity", 1),
+                                    "special_instructions": "Classic style"
+                                })
+                                found = True
+                                break
+                            # Regular case
+                            elif menu_item["name"].lower() == item["name"].lower():
                                 standardized_items.append({
                                     "item_id": menu_item["id"],
                                     "quantity": item.get("quantity", 1),
                                     "special_instructions": item.get("special_instructions", "")
                                 })
+                                found = True
                                 break
+                        
+                        # If not found, try fuzzy matching
+                        if not found:
+                            best_match = None
+                            best_score = 0
+                            item_name_lower = item["name"].lower()
+                            
+                            for menu_item in menu_items:
+                                menu_name = menu_item["name"].lower()
+                                # Check if item name contains menu item name or vice versa
+                                if menu_name in item_name_lower or item_name_lower in menu_name:
+                                    score = len(menu_name) if menu_name in item_name_lower else len(item_name_lower)
+                                    if score > best_score:
+                                        best_score = score
+                                        best_match = menu_item
+                            
+                            if best_match:
+                                print(f"Fuzzy matched '{item['name']}' to '{best_match['name']}'")
+                                standardized_items.append({
+                                    "item_id": best_match["id"],
+                                    "quantity": item.get("quantity", 1),
+                                    "special_instructions": item.get("special_instructions", "")
+                                })
                 elif isinstance(item, str):
                     # Find item by name
+                    found = False
                     for menu_item in menu_items:
-                        if menu_item["name"].lower() == item.lower():
+                        # Special case for Classic Latte
+                        if "classic latte" == item.lower() and menu_item["name"].lower() == "latte":
+                            standardized_items.append({
+                                "item_id": menu_item["id"],
+                                "quantity": 1,
+                                "special_instructions": "Classic style"
+                            })
+                            found = True
+                            break
+                        # Regular case
+                        elif menu_item["name"].lower() == item.lower():
                             standardized_items.append({
                                 "item_id": menu_item["id"],
                                 "quantity": 1,
                                 "special_instructions": ""
                             })
+                            found = True
                             break
+                    
+                    # If not found, try fuzzy matching
+                    if not found:
+                        best_match = None
+                        best_score = 0
+                        item_lower = item.lower()
+                        
+                        for menu_item in menu_items:
+                            menu_name = menu_item["name"].lower()
+                            # Check if item name contains menu item name or vice versa
+                            if menu_name in item_lower or item_lower in menu_name:
+                                score = len(menu_name) if menu_name in item_lower else len(item_lower)
+                                if score > best_score:
+                                    best_score = score
+                                    best_match = menu_item
+                        
+                        if best_match:
+                            print(f"Fuzzy matched '{item}' to '{best_match['name']}'")
+                            standardized_items.append({
+                                "item_id": best_match["id"],
+                                "quantity": 1,
+                                "special_instructions": ""
+                            })
                             
             if standardized_items:
                 order_data["items"] = standardized_items
@@ -402,22 +536,32 @@ class OrderManager:
                 
             # Check for delivery location based on type
             if not order_data.get("delivery_location"):
-                if order_data.get("delivery_type").lower() in ["dine-in", "dine in", "dinein"]:
+                delivery_type_lower = order_data.get("delivery_type").lower()
+                if delivery_type_lower in ["dine-in", "dine in", "dinein"]:
+                    # Check if table number is already in delivery_type description
+                    # Extract table number if possible
+                    if "table" in delivery_type_lower:
+                        table_parts = delivery_type_lower.split("table")
+                        if len(table_parts) > 1 and table_parts[1].strip().isdigit():
+                            order_data["delivery_location"] = f"Table {table_parts[1].strip()}"
+                            print(f"Extracted table number from delivery_type: {order_data['delivery_location']}")
+                    # If still no delivery_location, prompt for table number
+                    if not order_data.get("delivery_location"):
+                        return {
+                            "status": "incomplete",
+                            "message": "Which table number are you sitting at?",
+                            "missing_field": "delivery_location",
+                            "order_so_far": order_data
+                        }
+                elif delivery_type_lower in ["delivery", "deliver"]:
                     return {
                         "status": "incomplete",
-                        "message": "Which table should we bring your order to?",
+                        "message": "What address would you like your order delivered to?",
                         "missing_field": "delivery_location",
                         "order_so_far": order_data
                     }
-                elif order_data.get("delivery_type").lower() in ["delivery", "deliver"]:
-                    return {
-                        "status": "incomplete",
-                        "message": "What address should we deliver your order to?",
-                        "missing_field": "delivery_location",
-                        "order_so_far": order_data
-                    }
-                elif order_data.get("delivery_type").lower() in ["pickup", "pick-up", "pick up", "takeout", "take-out", "take out"]:
-                    # For pickup, we can use a default location
+                elif delivery_type_lower in ["pickup", "pick-up", "pick up", "takeout", "take-out", "take out"]:
+                    # For pickup, use default location
                     order_data["delivery_location"] = "Pickup Counter"
             
             # Check for payment method
@@ -426,6 +570,138 @@ class OrderManager:
                     "status": "incomplete",
                     "message": "How would you like to pay? We accept Credit Card, Cash, or Mobile Payment.",
                     "missing_field": "payment_method",
+                    "order_so_far": order_data
+                }
+                
+            
+
+            # Add verification step if all required fields are present but verification_complete is not set
+            if not order_data.get("verification_complete", False):
+                # Generate order ID during verification if not present
+                if "id" not in order_data:
+                    order_id = f"ORD-{uuid.uuid4().hex[:8].upper()}"
+                    order_data["id"] = order_id
+                    print(f"Generated order ID for verification: {order_id}")
+                
+                # Format order summary for verification
+                items_summary = []
+                total_price = 0
+                
+                for item in order_data.get("items", []):
+                    # Find item details for display
+                    item_id = item.get("item_id")
+                    quantity = item.get("quantity", 1)
+                    
+                    # Find menu item details
+                    menu_item = next((mi for mi in menu_items if mi["id"] == item_id), None)
+                    
+                    if menu_item:
+                        item_name = menu_item["name"]
+                        item_price = menu_item.get("price", 0) * quantity
+                        items_summary.append(f"{quantity}x {item_name} (${item_price:.2f})")
+                        total_price += item_price
+                    else:
+                        items_summary.append(f"{quantity}x Item #{item_id}")
+                
+                # Format delivery details
+                delivery_type = order_data.get("delivery_type", "").capitalize()
+                delivery_location = order_data.get("delivery_location", "")
+                payment_method = order_data.get("payment_method", "")
+                
+                # Create verification message
+                verification_message = f"Your order summary:\n\n"
+                verification_message += "• " + "\n• ".join(items_summary) + "\n\n"
+                verification_message += f"Total: ${total_price:.2f}\n"
+                verification_message += f"Type: {delivery_type}\n"
+                verification_message += f"Location: {delivery_location}\n"
+                verification_message += f"Payment: {payment_method}\n\n"
+                verification_message += "Would you like to add anything else to your order, confirm it as is, or cancel the order?"
+                
+                # IMPORTANT: Update cart items for Dash app during verification
+                try:
+                    # REPLACE EVERYTHING FROM HERE...
+                    # Calculate the total price
+                    total_price = 0
+                    for item in order_data["items"]:
+                        item_id = item.get("item_id")
+                        quantity = item.get("quantity", 1)
+                        # Find item price
+                        for menu_item in menu_items:
+                            if menu_item["id"] == item_id:
+                                total_price += menu_item.get("price", 0) * quantity
+                                break
+                    
+                    # Store total in order_data for future use
+                    order_data["total"] = total_price
+                    
+                    # Format order summary
+                    items_summary = []
+                    for item in order_data.get("items", []):
+                        # Find item details for display
+                        item_id = item.get("item_id")
+                        quantity = item.get("quantity", 1)
+                        
+                        # Find menu item details
+                        menu_item = next((mi for mi in menu_items if mi["id"] == item_id), None)
+                        
+                        if menu_item:
+                            item_name = menu_item["name"]
+                            item_price = menu_item.get("price", 0) * quantity
+                            items_summary.append(f"{quantity}x {item_name} (${item_price:.2f})")
+                        else:
+                            items_summary.append(f"{quantity}x Item #{item_id}")
+                    
+                    # Format delivery details
+                    delivery_type = order_data.get("delivery_type", "").capitalize()
+                    delivery_location = order_data.get("delivery_location", "")
+                    payment_method = order_data.get("payment_method", "")
+                    
+                    # Create verification message
+                    verification_message = f"Your order summary:\n\n"
+                    verification_message += "• " + "\n• ".join(items_summary) + "\n\n"
+                    verification_message += f"Total: ${total_price:.2f}\n"
+                    verification_message += f"Type: {delivery_type}\n"
+                    verification_message += f"Location: {delivery_location}\n"
+                    verification_message += f"Payment: {payment_method}\n\n"
+                    verification_message += "Would you like to add anything else to your order, confirm it as is, or cancel the order?"
+                    
+                    # CRITICAL FIX: Create cart-friendly format with total included
+                    cart_items = []
+                    for item in order_data["items"]:
+                        item_id = item.get("item_id")
+                        quantity = item.get("quantity", 1)
+                        
+                        # Find menu item details
+                        menu_item = next((m for m in menu_items if m["id"] == item_id), None)
+                        if menu_item:
+                            cart_items.append({
+                                "id": item_id,
+                                "name": menu_item["name"],
+                                "price": menu_item.get("price", 0),
+                                "quantity": quantity,
+                                "special_instructions": item.get("special_instructions", "")
+                            })
+                    
+                    # Create cart-specific message WITH TOTAL
+                    cart_update = {
+                        "type": "cart_update",
+                        "items": cart_items,
+                        "order_id": order_data.get("id", str(uuid.uuid4())),
+                        "username": order_data.get("username", "guest"),
+                        "user_id": order_data.get("user_id", "guest"),
+                        "total": total_price  # CRITICAL: Include the total here
+                    }
+                    
+                    # Use the updated helper function to update the UI with the total
+                    update_chat_ui_with_order(order_data)
+                    # ...TO HERE
+                except Exception as cart_err:
+                    print(f"Error updating cart during verification: {cart_err}")
+                
+                # Return verification request
+                return {
+                    "status": "verification",
+                    "message": verification_message,
                     "order_so_far": order_data
                 }
                 
@@ -514,7 +790,8 @@ class OrderManager:
                     "items": cart_items,
                     "order_id": order_data["id"],
                     "username": order_data.get("username", "guest"),
-                    "user_id": order_data.get("user_id", "guest")
+                    "user_id": order_data.get("user_id", "guest"),
+                    "total": order_data.get("total", 0)  # Add the total from order_data
                 }
                 
                 # METHOD 1: Try Socket.IO first
@@ -544,7 +821,8 @@ class OrderManager:
                     cl.send_to_parent({
                         "type": "cart_update",
                         "items": cart_items,
-                        "order_id": order_data["id"]
+                        "order_id": order_data["id"],
+                        "total": order_data.get("total", 0)  # IMPORTANT: Include the total here
                     })
                     
                     print("Order notification sent to parent")
@@ -637,7 +915,16 @@ class OrderManager:
             
         status = order_response.get("status", "unknown")
         
-        if status == "incomplete":
+        # Handle verification status (new)
+        if status == "verification":
+            # Just return the verification message directly
+            return order_response.get("message", "Please review your order. Would you like to add anything else?")
+            
+        elif status == "confirmation_only":
+            # Process confirmation
+            return order_response.get("message", "Please confirm that you want to finalize your order.")
+
+        elif status == "incomplete":
             # Order needs more details
             message = order_response.get("message", "I need more information to complete your order.")
             missing_field = order_response.get("missing_field", "")
@@ -671,7 +958,6 @@ class OrderManager:
                     summary += "Items:\n"
                     try:
                         # Try to display proper item names
-                        from app.data.database import get_menu_items
                         menu_lookup = {item["id"]: item for item in menu_items}
                         
                         for item in order["items"]:
@@ -707,7 +993,7 @@ class OrderManager:
         else:
             # Unknown response type
             return "I'm not sure what happened with your order. Can you try again please?"
-
+    
     @staticmethod
     def get_order_status(order_id):
         """
@@ -1133,13 +1419,27 @@ def parse_order_text(text):
         dict: Structured order data.
     """
     try:
+        # Quick check if this is just a confirmation message, not a new order
+        text_lower = text.lower().strip()
+        confirmation_phrases = [
+            "that's all", "thats all", "nothing else", "finalize", "place order",
+            "confirm", "that is all", "looks good", "proceed", "yes", "complete",
+            "finish", "done", "good to go", "fine", "perfect", "correct", "ok", 
+            "okay", "sure", "yeah", "yep", "sounds good", "just that", "that's it",
+            "that looks right", "place my order", "go ahead", "that's correct",
+            "that will be it", "that will be all", "finalize it", "that'll be it"
+        ]
+        
+        # If this is just a confirmation message with no menu items, raise a special error
+        if any(phrase == text_lower or phrase in text_lower for phrase in confirmation_phrases) and len(text_lower.split()) <= 5:
+            return {
+                "is_confirmation": True,
+                "items": []  # Empty items list
+            }
+            
         context = cl.user_session.get("context", {})
         order_items = []
         special_instructions_global = ""
-        
-        # Extract items and quantities
-        text_lower = text.lower()
-        print(f"Parsing order text: {text_lower}")
         
         # Extract global special instructions
         if "with " in text_lower and " and " in text_lower.split("with ")[1]:
@@ -1155,12 +1455,15 @@ def parse_order_text(text):
             "dine-in": "dine-in", 
             "dinein": "dine-in",
             "table": "dine-in",
+            "sit": "dine-in",
+            "restaurant": "dine-in",
             "pickup": "pickup",
             "pick up": "pickup",
             "pick-up": "pickup",
             "takeout": "pickup",
             "take out": "pickup",
             "take-out": "pickup",
+            "to go": "pickup",
             "delivery": "delivery",
             "deliver": "delivery", 
             "bring to": "delivery",
@@ -1174,31 +1477,69 @@ def parse_order_text(text):
         
         # Extract delivery location
         delivery_location = ""
-        if "table" in text_lower:
-            table_index = text_lower.find("table")
-            if table_index != -1:
-                after_table = text_lower[table_index+5:].strip()
-                table_parts = after_table.split()
-                if table_parts and table_parts[0].isdigit():
-                    delivery_location = f"Table {table_parts[0]}"
-                elif len(table_parts) > 0:
-                    delivery_location = f"Table area: {' '.join(table_parts[:3])}"
-        elif any(term in text_lower for term in ["deliver to", "delivery to", "send to", "bring to"]):
-            for term in ["deliver to", "delivery to", "send to", "bring to"]:
-                if term in text_lower:
-                    location_start = text_lower.find(term) + len(term)
-                    location_text = text_lower[location_start:].strip()
-                    # Extract up to the next punctuation or end
-                    end_idx = len(location_text)
-                    for i, char in enumerate(location_text):
-                        if char in ['.', ',', ';', '!', '?']:
-                            end_idx = i
-                            break
-                    if end_idx > 0:
-                        delivery_location = location_text[:end_idx].strip()
-                    break
         
-        # Extract payment method
+        # IMPROVED TABLE EXTRACTION for dine-in
+        if "table" in text_lower:
+            # Use regex to find table numbers more reliably
+            import re
+            table_matches = re.findall(r'table\s*(\d+)', text_lower)
+            if table_matches:
+                delivery_location = f"Table {table_matches[0]}"
+                print(f"Extracted table number from text: {delivery_location}")
+            elif any(part.isdigit() for part in text_lower.split()):
+                for i, part in enumerate(text_lower.split()):
+                    if part.isdigit() and i > 0 and text_lower.split()[i-1] in ["table", "number", "#"]:
+                        delivery_location = f"Table {part}"
+                        print(f"Found table number with context: {delivery_location}")
+                        break
+                    elif part.isdigit():
+                        delivery_location = f"Table {part}"
+                        print(f"Found possible table number: {delivery_location}")
+                        break
+        
+        # IMPROVED ADDRESS EXTRACTION for delivery
+        elif delivery_type == "delivery":
+            address_indicators = ["deliver to", "delivery to", "send to", "bring to", "address", "location", "at"]
+            for indicator in address_indicators:
+                if indicator in text_lower:
+                    idx = text_lower.find(indicator) + len(indicator)
+                    # Get everything after the indicator
+                    address_part = text_lower[idx:].strip()
+                    
+                    # Handle multiple sentences
+                    if any(end_char in address_part for end_char in ['.', ',', ';', '!', '?']):
+                        for end_char in ['.', ',', ';', '!', '?']:
+                            if end_char in address_part:
+                                address_part = address_part.split(end_char)[0].strip()
+                                break
+                    
+                    # Filter out payment info
+                    payment_terms = ["pay", "cash", "credit", "card", "apple pay", "google pay"]
+                    for term in payment_terms:
+                        if term in address_part:
+                            address_part = address_part.split(term)[0].strip()
+                    
+                    if len(address_part) > 3 and not any(word in address_part for word in ["my order", "it", "this"]):
+                        delivery_location = address_part.capitalize()
+                        print(f"Extracted delivery address: {delivery_location}")
+                        break
+            
+            # Fallback address extraction - look for common address patterns
+            if not delivery_location:
+                # Look for numeric addresses (e.g. "123 Main St")
+                import re
+                address_match = re.search(r'\b\d+\s+[a-zA-Z\s]+(?:street|st|avenue|ave|road|rd|lane|ln|drive|dr|circle|cir|court|ct|place|pl|boulevard|blvd)\b', text_lower, re.IGNORECASE)
+                if address_match:
+                    delivery_location = address_match.group().capitalize()
+                    print(f"Found address with street number: {delivery_location}")
+                else:
+                    # Try simpler pattern - just a number followed by words
+                    address_match = re.search(r'\b\d+\s+[a-zA-Z\s]{5,30}\b', text_lower)
+                    if address_match:
+                        delivery_location = address_match.group().capitalize()
+                        print(f"Found potential address: {delivery_location}")
+        
+        # Extract payment method with improved detection
         payment_method = ""
         payment_terms = {
             "credit card": "Credit Card",
@@ -1206,14 +1547,19 @@ def parse_order_text(text):
             "card": "Credit Card",
             "visa": "Credit Card",
             "mastercard": "Credit Card",
+            "debit": "Credit Card",
             "cash": "Cash",
             "money": "Cash",
+            "bills": "Cash",
+            "dollars": "Cash",
             "mobile payment": "Mobile Payment",
             "mobile": "Mobile Payment",
             "apple pay": "Mobile Payment",
             "google pay": "Mobile Payment",
             "samsung pay": "Mobile Payment",
-            "phone": "Mobile Payment"
+            "phone": "Mobile Payment",
+            "venmo": "Mobile Payment",
+            "paypal": "Mobile Payment"
         }
         
         for term, method in payment_terms.items():
@@ -1221,59 +1567,77 @@ def parse_order_text(text):
                 payment_method = method
                 break
         
-        # Process menu items (original code)
-        for item in menu_items:
-            item_name_lower = item["name"].lower()
-            
-            # Try different ways the item might appear in text
-            variations = [
-                item_name_lower,
-                item_name_lower.replace(" ", ""),  # No spaces
-                item_name_lower.replace("-", ""),  # No hyphens
-                item_name_lower.replace(" ", "-"),  # Spaces as hyphens
-            ]
-            
-            found = False
-            for variation in variations:
-                if variation in text_lower:
-                    found = True
+        # Special handling for "classic latte" case
+        if "classic latte" in text_lower or "classic" in text_lower and "latte" in text_lower:
+            for menu_item in menu_items:
+                if menu_item["name"].lower() == "latte":
+                    print(f"Found special case: Classic Latte")
+                    order_items.append({
+                        "item_id": menu_item["id"],
+                        "quantity": 1,
+                        "special_instructions": "Classic style"
+                    })
                     break
+        
+        # If we haven't found a "classic latte", continue with regular parsing
+        if not order_items:
+            # Process menu items with improved matching for other items
+            for item in menu_items:
+                item_name_lower = item["name"].lower()
+                
+                # Skip if we already have this item (e.g., classic latte)
+                if item_name_lower == "latte" and any(item["item_id"] == item_id for item_id in [i["item_id"] for i in order_items]):
+                    continue
+                
+                # Try different ways the item might appear in text
+                variations = [
+                    item_name_lower,
+                    item_name_lower.replace(" ", ""),  # No spaces
+                    item_name_lower.replace("-", ""),  # No hyphens
+                    item_name_lower.replace(" ", "-"),  # Spaces as hyphens
+                ]
+                
+                found = False
+                for variation in variations:
+                    if variation in text_lower:
+                        found = True
+                        break
+                        
+                if found:
+                    # Try to find quantity before item name
+                    quantity = 1
+                    # Look for numeric quantities
+                    item_index = text_lower.find(item_name_lower)
+                    before_item = text_lower[:item_index].strip()
+                    words_before = before_item.split()
                     
-            if found:
-                # Try to find quantity before item name
-                quantity = 1
-                # Look for numeric quantities
-                item_index = text_lower.find(item_name_lower)
-                before_item = text_lower[:item_index].strip()
-                words_before = before_item.split()
-                
-                if words_before and words_before[-1].isdigit():
-                    quantity = int(words_before[-1])
-                else:
-                    # Look for written numbers
-                    number_words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, 
-                                    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
-                    for word, value in number_words.items():
-                        if f"{word} {item_name_lower}" in text_lower:
-                            quantity = value
-                            break
-                
-                # Special instruction handling for this specific item
-                special_instructions = ""
-                item_pos = text_lower.find(item_name_lower)
-                if item_pos >= 0:
-                    after_item = text_lower[item_pos + len(item_name_lower):]
-                    if "with " in after_item:
-                        with_part = after_item.split("with ")[1].split(".")[0].split(",")[0]
-                        if len(with_part) < 100:  # Reasonable length check
-                            special_instructions = f"With {with_part}"
-                
-                order_items.append({
-                    "item_id": item["id"],
-                    "quantity": quantity,
-                    "special_instructions": special_instructions
-                })
-                print(f"Found item: {item['name']}, quantity: {quantity}")
+                    if words_before and words_before[-1].isdigit():
+                        quantity = int(words_before[-1])
+                    else:
+                        # Look for written numbers
+                        number_words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, 
+                                        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+                        for word, value in number_words.items():
+                            if f"{word} {item_name_lower}" in text_lower:
+                                quantity = value
+                                break
+                    
+                    # Special instruction handling for this specific item
+                    special_instructions = ""
+                    item_pos = text_lower.find(item_name_lower)
+                    if item_pos >= 0:
+                        after_item = text_lower[item_pos + len(item_name_lower):]
+                        if "with " in after_item:
+                            with_part = after_item.split("with ")[1].split(".")[0].split(",")[0]
+                            if len(with_part) < 100:  # Reasonable length check
+                                special_instructions = f"With {with_part}"
+                    
+                    order_items.append({
+                        "item_id": item["id"],
+                        "quantity": quantity,
+                        "special_instructions": special_instructions
+                    })
+                    print(f"Found item: {item['name']}, quantity: {quantity}")
         
         # Try fuzzy matching if no items found
         if not order_items:
@@ -1313,6 +1677,9 @@ def parse_order_text(text):
             "payment_method": payment_method,
             "special_instructions": special_instructions_global
         }
+    except ValueError as e:
+        print(f"Parse order error details: {e}")
+        raise ValueError(f"Could not parse order text: {str(e)}")
     except Exception as e:
         print(f"Parse order error details: {e}")
         raise ValueError(f"Could not parse order text: {str(e)}")
@@ -2047,55 +2414,241 @@ async def process_message(message, message_id=None, source=None):
     
     if order_in_progress:
         print(f"Continuing order in progress: {order_in_progress}")
+
+        # Handle verification responses
+        if order_in_progress.get("status") == "verification":
+            print("Processing verification response for order")
+            order_so_far = order_in_progress.get("order_so_far", {})
+            msg_lower = message.lower()
+
+            # Enhanced list of confirmation phrases for better recognition
+            finalize_phrases = [
+                "that's all", "thats all", "nothing else", "finalize", "place order",
+                "confirm", "that is all", "looks good", "proceed", "yes", "complete",
+                "finish", "done", "good to go", "fine", "perfect", "correct", "ok", 
+                "okay", "sure", "yeah", "yep", "sounds good", "just that", "that's it",
+                "that looks right", "place my order", "go ahead", "that's correct",
+                "that will be it", "that will be all", "finalize it", "that'll be it",
+                "confirm it", "confirmation", "order it", "submit", "send it", "order now"
+            ]
+            
+            # Phrases indicating the user wants to add more items
+            add_more_phrases = [
+                "add", "also", "more", "another", "additional", "extra", "include", 
+                "plus", "and", "with", "get", "want", "like", "would like", "i'd like",
+                "include", "put in", "throw in", "add on", "as well"
+            ]
+            
+            # Phrases indicating the user wants to cancel the order
+            cancel_phrases = [
+                "cancel", "never mind", "nevermind", "stop", "forget it", "don't want",
+                "dont want", "remove", "delete", "clear", "no", "nope", "cancel order",
+                "abandon", "scrap", "discard", "start over", "start again", "reset"
+            ]
+
+            # Check if user wants to cancel the order
+            if any(phrase in msg_lower for phrase in cancel_phrases) and not any(
+                phrase in msg_lower for phrase in add_more_phrases + finalize_phrases):
+                # Clear order in progress
+                cl.user_session.set("order_in_progress", None)
+                
+                # Send cancellation message
+                await cl.Message(content="I've canceled your order. Is there anything else I can help you with?").send()
+                return
+
+            # Check if user is confirming the order without additions
+            if any(phrase in msg_lower for phrase in finalize_phrases) and not any(phrase in msg_lower for phrase in add_more_phrases):
+                # Mark order as verified before finalizing
+                order_so_far["verification_complete"] = True
+                
+                try:
+                    # Send a message to indicate we're processing
+                    await cl.Message(content="Processing your order...").send()
+                    
+                    # Ensure the total is properly calculated and update UI
+                    update_chat_ui_with_order(order_so_far)
+                    
+                    # Process the finalized order
+                    response = OrderManager.place_order(order_so_far)
+                    cl.user_session.set("order_in_progress", None)
+                    user_message = OrderManager.handle_order_response(response)
+                    track_message(user_message, is_user=False)
+                    await cl.Message(content=user_message).send()
+                    return
+                except Exception as e:
+                    print(f"Error finalizing order: {e}")
+                    await cl.Message(content=f"I apologize, but there was an issue finalizing your order. Let me try again with a different approach.").send()
+                    
+                    # Try a simpler approach
+                    try:
+                        print("Attempting simpler direct order approach")
+                        # Create a simplified order manually
+                        simple_order = {
+                            "items": order_so_far.get("items", [{"item_id": 2, "quantity": 1}]),
+                            "delivery_type": order_so_far.get("delivery_type", "dine-in"),
+                            "delivery_location": order_so_far.get("delivery_location", "Table 1"),
+                            "payment_method": order_so_far.get("payment_method", "Credit Card"),
+                            "verification_complete": True
+                        }
+                        # Process this simpler order
+                        response = OrderManager.place_order(simple_order)
+                        cl.user_session.set("order_in_progress", None)
+                        user_message = OrderManager.handle_order_response(response)
+                        track_message(user_message, is_user=False)
+                        await cl.Message(content=user_message).send()
+                    except Exception as backup_err:
+                        print(f"Backup order approach also failed: {backup_err}")
+                        await cl.Message(content="I'm very sorry, but I'm experiencing technical difficulties with our ordering system. Please try again in a moment or contact our staff directly for assistance.").send()
+                    return
+
+            # Check if user wants to add more items
+            elif any(phrase in msg_lower for phrase in add_more_phrases):
+                try:
+                    # Find additional items
+                    additional_items = []
+                    
+                    for menu_item in menu_items:
+                        item_name_lower = menu_item["name"].lower()
+                        if item_name_lower in msg_lower:
+                            quantity = 1
+                            for i in range(1, 10):
+                                if f"{i} {item_name_lower}" in msg_lower or f"{i}{item_name_lower}" in msg_lower:
+                                    quantity = i
+                                    break
+                            additional_items.append({
+                                "item_id": menu_item["id"],
+                                "quantity": quantity,
+                                "special_instructions": ""
+                            })
+                            print(f"Adding additional item: {menu_item['name']}, quantity: {quantity}")
+
+                    if additional_items:
+                        # Add items to the order
+                        order_so_far["items"].extend(additional_items)
+                        updated_response = OrderManager.place_order(order_so_far)
+                        cl.user_session.set("order_in_progress", updated_response)
+                        user_message = OrderManager.handle_order_response(updated_response)
+                        track_message(user_message, is_user=False)
+                        await cl.Message(content=user_message).send()
+                        return
+                    else:
+                        # Couldn't detect specific items - ask for clarification
+                        await cl.Message(content="I'm not sure what you'd like to add. Could you specify which items you'd like to add to your order?").send()
+                        return
+                except Exception as e:
+                    print(f"Error parsing additional items: {e}")
+                    await cl.Message(content="I'm having trouble understanding what you'd like to add. Could you specify which items from our menu you'd like to add?").send()
+                    return
+            else:
+                await cl.Message(content="I'm not sure what you'd like to do. Would you like to add more items to your order, confirm it as is, or cancel the order?").send()
+                return
         
-        # Handle the response based on what we were waiting for
+        # Handle other missing fields
         missing_field = order_in_progress.get("missing_field", "")
         order_so_far = order_in_progress.get("order_so_far", {})
-        
+
         if missing_field == "delivery_type":
             # Update the delivery type based on user response
             delivery_type = ""
             msg_lower = message.lower()
             
-            if any(term in msg_lower for term in ["dine", "dine in", "dine-in", "eat in", "table"]):
+            # Enhanced detection of delivery type
+            if any(term in msg_lower for term in ["dine", "dine in", "dine-in", "eat in", "table", "sit", "dining", "restaurant"]):
                 delivery_type = "dine-in"
-            elif any(term in msg_lower for term in ["pickup", "pick up", "pick-up", "take out", "takeout", "take-out"]):
+            elif any(term in msg_lower for term in ["pickup", "pick up", "pick-up", "take out", "takeout", "take-out", "collect", "to go"]):
                 delivery_type = "pickup"
-            elif any(term in msg_lower for term in ["delivery", "deliver", "send", "bring"]):
+            elif any(term in msg_lower for term in ["delivery", "deliver", "send", "bring", "ship", "transport"]):
                 delivery_type = "delivery"
-                
+
             if delivery_type:
-                # Update the order
                 order_so_far["delivery_type"] = delivery_type
-                
-                # Try to continue the order
                 response = OrderManager.place_order(order_so_far)
-                
-                # If we need more info, update the order in progress
                 if response.get("status") == "incomplete":
                     cl.user_session.set("order_in_progress", response)
                 else:
-                    # Order completed or error
                     cl.user_session.set("order_in_progress", None)
-                
-                # Send the response
                 user_message = OrderManager.handle_order_response(response)
                 track_message(user_message, is_user=False)
                 await cl.Message(content=user_message).send()
                 return
-        
+
         elif missing_field == "delivery_location":
             # Update the delivery location based on user response
-            order_so_far["delivery_location"] = message.strip()
-            
-            # Try to continue the order
+            if order_so_far.get("delivery_type") == "delivery":
+                order_so_far["delivery_location"] = message.strip()
+                print(f"Set delivery address: {message.strip()}")
+            else:
+                # For dine-in: Better table number extraction
+                if "table" in message.lower():
+                    table_parts = message.lower().split("table")
+                    if len(table_parts) > 1:
+                        # Extract the first number after "table"
+                        import re
+                        number_match = re.search(r'\d+', table_parts[1])
+                        if number_match:
+                            table_number = number_match.group()
+                            order_so_far["delivery_location"] = f"Table {table_number}"
+                            print(f"Extracted table number from message: {order_so_far['delivery_location']}")
+                        else:
+                            # Use raw message if extraction fails
+                            order_so_far["delivery_location"] = message.strip()
+                    else:
+                        # Use raw message if no table parts
+                        order_so_far["delivery_location"] = message.strip()
+                else:
+                    # Better handling of numeric input
+                    # First check if the message contains only digits
+                    digits_only = ''.join(c for c in message if c.isdigit())
+                    if digits_only and len(digits_only) <= 3:  # Reasonable table number
+                        order_so_far["delivery_location"] = f"Table {digits_only}"
+                        print(f"Interpreted as table number: {order_so_far['delivery_location']}")
+                    else:
+                        order_so_far["delivery_location"] = message.strip()
+
+            # Try to continue the order processing
             response = OrderManager.place_order(order_so_far)
             
-            # If we need more info, update the order in progress
+            # Update order state based on response
             if response.get("status") == "incomplete":
                 cl.user_session.set("order_in_progress", response)
             else:
-                # Order completed or error
+                # Clear order progress if completed or error
+                cl.user_session.set("order_in_progress", None)
+            
+            # Prepare and send response message
+            user_message = OrderManager.handle_order_response(response)
+            track_message(user_message, is_user=False)
+            await cl.Message(content=user_message).send()
+            return
+            
+        elif missing_field == "payment_method":
+            # Update the payment method based on user response - improved detection
+            payment_method = ""
+            msg_lower = message.lower()
+            
+            if any(term in msg_lower for term in ["credit", "card", "visa", "mastercard", "credit card", "debit", "amex", "american express"]):
+                payment_method = "Credit Card"
+            elif any(term in msg_lower for term in ["cash", "money", "notes", "bills", "currency", "dollar", "pay with cash"]):
+                payment_method = "Cash"
+            elif any(term in msg_lower for term in ["mobile", "phone", "apple pay", "google pay", "mobile payment", "venmo", "paypal", "electronic"]):
+                payment_method = "Mobile Payment"
+            else:
+                # Default to Credit Card for unrecognized payment methods
+                payment_method = "Credit Card"
+                print(f"Unrecognized payment method '{message}', defaulting to Credit Card")
+            
+            # Update the order
+            order_so_far["payment_method"] = payment_method
+            
+            # Try to complete the order
+            response = OrderManager.place_order(order_so_far)
+            
+            # Check if order is actually complete now
+            if response.get("status") == "incomplete":
+                # Order still has missing fields
+                cl.user_session.set("order_in_progress", response)
+            else:
+                # Order is complete or there was an error - either way, end the order flow
                 cl.user_session.set("order_in_progress", None)
             
             # Send the response
@@ -2103,34 +2656,6 @@ async def process_message(message, message_id=None, source=None):
             track_message(user_message, is_user=False)
             await cl.Message(content=user_message).send()
             return
-            
-        elif missing_field == "payment_method":
-            # Update the payment method based on user response
-            payment_method = ""
-            msg_lower = message.lower()
-            
-            if any(term in msg_lower for term in ["credit", "card", "visa", "mastercard", "credit card"]):
-                payment_method = "Credit Card"
-            elif any(term in msg_lower for term in ["cash", "money"]):
-                payment_method = "Cash"
-            elif any(term in msg_lower for term in ["mobile", "phone", "apple pay", "google pay", "mobile payment"]):
-                payment_method = "Mobile Payment"
-                
-            if payment_method:
-                # Update the order
-                order_so_far["payment_method"] = payment_method
-                
-                # Try to continue the order
-                response = OrderManager.place_order(order_so_far)
-                
-                # Order should be complete now
-                cl.user_session.set("order_in_progress", None)
-                
-                # Send the response
-                user_message = OrderManager.handle_order_response(response)
-                track_message(user_message, is_user=False)
-                await cl.Message(content=user_message).send()
-                return
     
     # If we got here, either there's no order in progress or we didn't handle it directly
     # Get the agent, if available
@@ -2630,54 +3155,184 @@ def update_user_session_field(user_id, field, value):
     
 
 def parse_items_from_response(response):
-    """Extract order items mentioned in a response"""
-    # Simplified version - in production you'd want more sophisticated parsing
+    """
+    Extract order items mentioned in a response with improved recognition.
+    
+    Args:
+        response (str): The agent's response text
+        
+    Returns:
+        list: List of item dictionaries
+    """
     items = []
     
-    # Try to find items mentioned in the response
+    # Convert response to lowercase for case-insensitive matching
+    response_lower = response.lower()
+    
+    # First, handle the special case of "classic latte" (or other classic items)
+    if "classic" in response_lower:
+        for menu_item in menu_items:
+            item_name_lower = menu_item["name"].lower()
+            if "latte" == item_name_lower and "classic latte" in response_lower:
+                # Found a classic latte reference
+                items.append({
+                    "item_id": menu_item["id"],
+                    "quantity": 1,
+                    "special_instructions": "Classic style"
+                })
+                print(f"Found classic version of: {menu_item['name']}")
+                # Continue searching for other items
+    
+    # Now do the regular item search for any items not handled by the classic case
     for menu_item in menu_items:
-        if menu_item["name"].lower() in response.lower():
+        item_name_lower = menu_item["name"].lower()
+        
+        # Skip if we already added this item as a "classic" version
+        if item_name_lower == "latte" and any(item["item_id"] == menu_item["id"] for item in items):
+            continue
+            
+        # Try different variations of the item name
+        variations = [
+            item_name_lower,
+            item_name_lower.replace(" ", ""),
+            item_name_lower + "s",  # plural form
+        ]
+        
+        found = False
+        for variation in variations:
+            if variation in response_lower:
+                found = True
+                break
+                
+        if found:
+            # Try to extract quantity
+            quantity = 1
+            
+            # Look for numeric quantities near the item name
+            import re
+            quantity_matches = re.findall(r'(\d+)\s*(?:x\s*)?(?:' + re.escape(item_name_lower) + r')', response_lower)
+            if quantity_matches:
+                try:
+                    quantity = int(quantity_matches[0])
+                except:
+                    pass
+            
+            # Add the item
             items.append({
                 "item_id": menu_item["id"],
+                "quantity": quantity,
+                "special_instructions": ""
+            })
+            print(f"Extracted item from response: {menu_item['name']}, quantity: {quantity}")
+    
+    if not items:
+        # Default item if we couldn't find any
+        print("No items found in response, using default item")
+        if menu_items and len(menu_items) > 0:
+            # Try to find a latte as default if mentioned
+            if "latte" in response_lower:
+                for menu_item in menu_items:
+                    if menu_item["name"].lower() == "latte":
+                        items.append({
+                            "item_id": menu_item["id"],
+                            "quantity": 1,
+                            "special_instructions": ""
+                        })
+                        break
+            # Otherwise use first menu item
+            if not items:
+                items.append({
+                    "item_id": menu_items[0]["id"],
+                    "quantity": 1,
+                    "special_instructions": ""
+                })
+        else:
+            # Fallback if menu_items is empty
+            items.append({
+                "item_id": 1,  # Assuming ID 1 is a valid item
                 "quantity": 1,
                 "special_instructions": ""
             })
     
-    if not items:
-        # Default item if we couldn't find any
-        items.append({
-            "item_id": 1,  # Assuming ID 1 is a valid item
-            "quantity": 1,
-            "special_instructions": ""
-        })
-    
     return items
 
 def parse_delivery_type(response):
-    """Extract delivery type from a response"""
+    """
+    Extract delivery type from a response with improved recognition.
+    
+    Args:
+        response (str): The agent's response text
+        
+    Returns:
+        str: Detected delivery type
+    """
     response_lower = response.lower()
     
-    if "dine-in" in response_lower or "dine in" in response_lower or "table" in response_lower:
+    # Enhanced dictionary of delivery type keywords
+    delivery_types = {
+        "dine-in": ["dine-in", "dine in", "dining", "table", "sit", "restaurant", "eating in"],
+        "pickup": ["pickup", "pick up", "pick-up", "takeout", "take out", "take-out", "to go", "collect"],
+        "delivery": ["delivery", "deliver", "delivered", "bringing", "send to", "bring to", "bringing to"]
+    }
+    
+    # Check for each type
+    for dtype, keywords in delivery_types.items():
+        if any(keyword in response_lower for keyword in keywords):
+            return dtype
+    
+    # Look for strong indicators through context
+    if "table number" in response_lower or "which table" in response_lower:
         return "dine-in"
-    elif "pickup" in response_lower or "pick up" in response_lower or "pick-up" in response_lower:
+    elif "pickup counter" in response_lower or "counter" in response_lower:
         return "pickup"
-    elif "delivery" in response_lower or "deliver" in response_lower:
+    elif "address" in response_lower or "location" in response_lower:
         return "delivery"
     
     return "dine-in"  # Default
 
 def parse_delivery_location(response):
-    """Extract delivery location from a response"""
+    """
+    Extract delivery location from a response with improved extraction.
+    
+    Args:
+        response (str): The agent's response text
+        
+    Returns:
+        str: Detected delivery location
+    """
     response_lower = response.lower()
     
+    # Check if this is a dine-in order
     if "table" in response_lower:
-        # Try to extract table number
-        parts = response_lower.split("table")
-        if len(parts) > 1:
-            after_table = parts[1].strip()
-            words = after_table.split()
-            if words and words[0].isdigit():
-                return f"Table {words[0]}"
+        # Try to extract table number using regex
+        import re
+        table_matches = re.findall(r'table\s*(\d+)', response_lower)
+        if table_matches:
+            return f"Table {table_matches[0]}"
+        
+        # Try to find any number after "table"
+        words = response_lower.split()
+        for i, word in enumerate(words):
+            if word == "table" and i+1 < len(words) and words[i+1].isdigit():
+                return f"Table {words[i+1]}"
+    
+    # Check if this is a delivery order
+    elif "address" in response_lower or "deliver to" in response_lower:
+        # Try to extract an address
+        import re
+        # Look for common address patterns
+        address_pattern = r'(\d+\s+[a-zA-Z\s]+(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln|place|pl|blvd))'
+        address_matches = re.findall(address_pattern, response_lower, re.IGNORECASE)
+        if address_matches:
+            return address_matches[0].capitalize()
+    
+    # Default values based on likely order type
+    if "dine-in" in response_lower or "table" in response_lower:
+        return "Table 1"  # Default table
+    elif "delivery" in response_lower:
+        return "Address needed"  # Placeholder for delivery
+    elif "pickup" in response_lower or "take" in response_lower:
+        return "Pickup Counter"  # Default for pickup
     
     return "Table 1"  # Default
 
@@ -2794,6 +3449,115 @@ def get_persisted_auth():
         logger.error(f"Error getting persisted auth: {e}")
     
     return str(uuid.uuid4()), "guest", {}, False
+
+
+def update_chat_ui_with_order(order_data):
+    """
+    Helper function to update the chat UI with current order data.
+    Uses the exact structure from the original code.
+    
+    Args:
+        order_data (dict): Order data to display
+    """
+    try:
+        # Calculate total if not already present
+        if "total" not in order_data or order_data["total"] == 0:
+            total = 0
+            for item in order_data.get("items", []):
+                item_id = item.get("item_id")
+                quantity = item.get("quantity", 1)
+                for menu_item in menu_items:
+                    if menu_item["id"] == item_id:
+                        total += menu_item.get("price", 0) * quantity
+                        break
+            order_data["total"] = total
+            print(f"Calculated total: {total} for order: {order_data.get('id', 'unknown')}")
+            
+        # Create cart-friendly format exactly as in original code
+        cart_items = []
+        for item in order_data["items"]:
+            item_id = item.get("item_id")
+            quantity = item.get("quantity", 1)
+            
+            # Find menu item details
+            menu_item = next((m for m in menu_items if m["id"] == item_id), None)
+            if menu_item:
+                cart_items.append({
+                    "id": item_id,
+                    "name": menu_item["name"],
+                    "price": menu_item.get("price", 0),
+                    "quantity": quantity,
+                    "special_instructions": item.get("special_instructions", "")
+                })
+        
+        # Create cart-specific message - add the total to cart_update
+        cart_update = {
+            "type": "cart_update",
+            "items": cart_items,
+            "order_id": order_data.get("id", str(uuid.uuid4())),
+            "username": order_data.get("username", "guest"),
+            "user_id": order_data.get("user_id", "guest"),
+            "total": order_data.get("total", 0)  # Important: Include the total here
+        }
+        
+        # METHOD 1: Try Socket.IO first
+        try:
+            import socketio
+            sio = socketio.Client()
+            sio.connect(DASHBOARD_URL)
+            # Send both general order update and specific cart update
+            print(f"Sending via Socket.IO. order_data total: {order_data.get('total')}")
+            sio.emit('order_update', order_data)
+            sio.emit('cart_update', cart_update)
+            sio.disconnect()
+            print("Order sent via Socket.IO")
+        except Exception as e:
+            print(f"Error sending order via Socket.IO: {e}")
+        
+        # METHOD 2: Try parent window messaging
+        try:
+            # Send order update to parent window
+            print(f"Sending to parent window. order_data total: {order_data.get('total')}")
+            cl.send_to_parent({
+                "type": "order_update", 
+                "order": order_data
+            })
+            
+            # CRITICAL: Also send cart_update event specifically
+            cl.send_to_parent({
+                "type": "cart_update",
+                "items": cart_items,
+                "order_id": order_data.get("id", "unknown"),
+                "total": order_data.get("total", 0)  # Important: Include the total here
+            })
+            
+            print("Order notification sent to parent")
+        except Exception as e:
+            print(f"Error sending order via cl.send_to_parent: {e}")
+            
+        # METHOD 3: Try REST API approach as a fallback
+        try:
+            # Call the place-order API endpoint
+            order_response = requests.post(
+                f"{DASHBOARD_URL}/api/place-order", 
+                json=order_data,
+                timeout=5
+            )
+            
+            # Call the update-cart API endpoint
+            cart_response = requests.post(
+                f"{DASHBOARD_URL}/api/update-cart", 
+                json=cart_update,
+                timeout=5
+            )
+            
+            if order_response.status_code == 200 or cart_response.status_code == 200:
+                print(f"Order API response: {order_response.status_code}, Cart API response: {cart_response.status_code}")
+        except Exception as api_err:
+            print(f"Error calling REST API: {api_err}")
+            
+    except Exception as e:
+        print(f"Error in update_chat_ui_with_order: {e}")
 
 @cl.set_starters
 async def set_starters():
