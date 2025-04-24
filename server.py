@@ -28,6 +28,153 @@ def configure_server(server, socketio):
         server (Flask): Flask server instance
         socketio (SocketIO): SocketIO instance
     """
+    @server.route('/api/robot/start-delivery', methods=['POST'])
+    def api_start_robot_delivery():
+        """API endpoint for starting a robot delivery from the dashboard"""
+        try:
+            data = request.get_json()
+            
+            # Validate request data
+            if not data:
+                return jsonify({'status': 'error', 'message': 'No data provided'}), 400
+                
+            # Extract required parameters
+            order_id = data.get('order_id')
+            delivery_location = data.get('delivery_location')
+            interface_name = data.get('interface_name', 'en7')
+            
+            if not order_id:
+                return jsonify({'status': 'error', 'message': 'Order ID is required'}), 400
+                
+            # Import the robot API utility
+            from app.utils.robot_api_utils import start_robot_delivery
+            
+            # Call the robot API to start the delivery
+            result = start_robot_delivery(
+                interface_name=interface_name,
+                order_id=order_id,
+                delivery_location=delivery_location
+            )
+            
+            # Check if the request was successful
+            if result.get('status') == 'success':
+                # Update order status to "out for delivery"
+                # In a real implementation, you'd update your database here
+                
+                # Emit socket event to notify clients
+                socketio.emit('robot_delivery_started', {
+                    'order_id': order_id,
+                    'delivery_location': delivery_location,
+                    'status': 'in_progress'
+                })
+                
+                return jsonify({
+                    'status': 'success',
+                    'message': f'Robot delivery started for order {order_id}',
+                    'data': result.get('data', {})
+                })
+            else:
+                return jsonify({
+                    'status': 'error',
+                    'message': result.get('error', 'Unknown error'),
+                    'details': result.get('details', '')
+                }), 500
+        
+        except Exception as e:
+            print(f"Error in start robot delivery API: {str(e)}")
+            return jsonify({'status': 'error', 'message': str(e)}), 500
+
+    @server.route('/api/robot/delivery-status', methods=['GET'])
+    def api_robot_delivery_status():
+        """API endpoint to get the status of a robot delivery"""
+        try:
+            # Extract query parameters
+            delivery_id = request.args.get('delivery_id')
+            order_id = request.args.get('order_id')
+            
+            if not delivery_id and not order_id:
+                return jsonify({'status': 'error', 'message': 'Either delivery_id or order_id is required'}), 400
+                
+            # Import the robot API utility
+            from app.utils.robot_api_utils import get_robot_delivery_status
+            
+            # Call the robot API to get the delivery status
+            result = get_robot_delivery_status(
+                delivery_id=delivery_id,
+                order_id=order_id
+            )
+            
+            # Check if the request was successful
+            if result.get('status') == 'success':
+                return jsonify({
+                    'status': 'success',
+                    'data': result.get('data', {})
+                })
+            else:
+                return jsonify({
+                    'status': 'error',
+                    'message': result.get('error', 'Unknown error'),
+                    'details': result.get('details', '')
+                }), 500
+        
+        except Exception as e:
+            print(f"Error in robot delivery status API: {str(e)}")
+            return jsonify({'status': 'error', 'message': str(e)}), 500
+
+    @server.route('/api/robot/cancel-delivery', methods=['POST'])
+    def api_cancel_robot_delivery():
+        """API endpoint to cancel a robot delivery"""
+        try:
+            data = request.get_json()
+            
+            # Validate request data
+            if not data:
+                return jsonify({'status': 'error', 'message': 'No data provided'}), 400
+                
+            # Extract required parameters
+            delivery_id = data.get('delivery_id')
+            order_id = data.get('order_id')
+            
+            if not delivery_id and not order_id:
+                return jsonify({'status': 'error', 'message': 'Either delivery_id or order_id is required'}), 400
+                
+            # Import the robot API utility
+            from app.utils.robot_api_utils import cancel_robot_delivery
+            
+            # Call the robot API to cancel the delivery
+            result = cancel_robot_delivery(
+                delivery_id=delivery_id,
+                order_id=order_id
+            )
+            
+            # Check if the request was successful
+            if result.get('status') == 'success':
+                # Emit socket event to notify clients
+                socketio.emit('robot_delivery_cancelled', {
+                    'order_id': order_id,
+                    'delivery_id': delivery_id,
+                    'status': 'cancelled'
+                })
+                
+                return jsonify({
+                    'status': 'success',
+                    'message': f'Robot delivery cancelled successfully',
+                    'data': result.get('data', {})
+                })
+            else:
+                return jsonify({
+                    'status': 'error',
+                    'message': result.get('error', 'Unknown error'),
+                    'details': result.get('details', '')
+                }), 500
+        
+        except Exception as e:
+            print(f"Error in cancel robot delivery API: {str(e)}")
+            return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+#====================================================================================
+
     # Add this to the configure_server function in server.py
     @socketio.on('cart_update')
     def handle_cart_update(data):
@@ -352,6 +499,46 @@ def configure_server(server, socketio):
             print(f"Error in handle_chat_message_from_dashboard: {e}")
             return {'status': 'error', 'message': str(e)}
         
+    # Add this debug endpoint to the configure_server function in server.py
+
+    @server.route('/debug/test-robot-delivery', methods=['GET'])
+    def debug_test_robot_delivery():
+        """Debug endpoint to test the robot delivery API directly"""
+        try:
+            # Import the robot API utilities
+            from app.utils.robot_api_utils import start_robot_delivery
+            
+            # Get parameters from query string
+            order_id = request.args.get('order_id', f"TEST-{int(time.time())}")
+            interface_name = request.args.get('interface', 'en7')
+            delivery_location = request.args.get('address', '123 Main Street, Apt 4B')
+            
+            # Call the robot API
+            result = start_robot_delivery(
+                interface_name=interface_name,
+                order_id=order_id,
+                delivery_location=delivery_location
+            )
+            
+            # Return the result
+            return jsonify({
+                'test': 'robot_delivery_api',
+                'params': {
+                    'order_id': order_id,
+                    'interface_name': interface_name,
+                    'delivery_location': delivery_location
+                },
+                'result': result,
+                'timestamp': datetime.now().isoformat()
+            })
+        
+        except Exception as e:
+            return jsonify({
+                'status': 'error',
+                'message': f"Error testing robot delivery API: {str(e)}",
+                'traceback': traceback.format_exc()
+            }), 500
+        
     # Update this in server.py to improve order handling
 
     # Enhanced order update handler
@@ -452,4 +639,32 @@ def configure_server(server, socketio):
             return {"status": "success", "message": "Auth update broadcast successfully"}
         except Exception as e:
             print(f"Error handling auth update: {e}")
+            return {"status": "error", "message": str(e)}
+        
+
+    @socketio.on('robot_location_update')
+    def handle_robot_update(data):
+        """
+        Handle robot location update events from the robot API
+        
+        Args:
+            data (dict): Robot location and status data
+        """
+        try:
+            print(f"Robot update received: {data}")
+            
+            # Validate data format
+            if not isinstance(data, dict):
+                print(f"Invalid robot update format: {type(data)}")
+                return {"status": "error", "message": "Invalid data format"}
+                
+            # Broadcast the update to all clients
+            socketio.emit('robot_update', data)
+            
+            # Also store in memory for clients that reconnect
+            # In a real implementation, you'd store this in a database
+            
+            return {"status": "success", "message": "Robot update broadcast successfully"}
+        except Exception as e:
+            print(f"Error handling robot update: {e}")
             return {"status": "error", "message": str(e)}

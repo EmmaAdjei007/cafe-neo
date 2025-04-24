@@ -18,12 +18,14 @@ def register_callbacks(app, socketio):
         socketio: SocketIO instance for real-time communication
     """
     @app.callback(
-        Output("robot-location-map", "figure"),
-        [Input("status-update-interval", "n_intervals")],
-        [State("delivery-update-store", "data")]
-    )
-    def update_robot_map(n_intervals, delivery_data):
-        """Update the robot location map"""
+    Output("robot-location-map", "figure"),
+    [Input("status-update-interval", "n_intervals"),
+     Input("socket-order-update", "children")],  # Added to update when new orders come in
+    [State("delivery-update-store", "data"),
+     State("user-store", "data")]  # Added user_store to check active orders
+)
+    def update_robot_map(n_intervals, socket_update, delivery_data, user_data):
+        """Update the robot location map with enhanced robot delivery integration"""
         # Create base map
         fig = go.Figure(go.Scattermapbox())
         
@@ -38,93 +40,186 @@ def register_callbacks(app, socketio):
             height=500
         )
         
-        # If we have delivery data, plot the robot and route
-        if delivery_data:
-            # Try to parse the delivery data
+        # Try to get delivery data from multiple sources
+        active_delivery = None
+        
+        # First check if we got a socket update with delivery info
+        if socket_update:
             try:
-                delivery = json.loads(delivery_data)
-                
-                # Get robot location
-                robot_location = delivery.get("robot_location", {})
-                
-                # Get route coordinates
-                route = delivery.get("route", [])
-                
-                # Add robot marker
-                if robot_location and "lat" in robot_location and "lng" in robot_location:
-                    fig.add_trace(go.Scattermapbox(
-                        lat=[robot_location["lat"]],
-                        lon=[robot_location["lng"]],
-                        mode="markers",
-                        marker=dict(size=15, color="red"),
-                        name="Robot"
-                    ))
-                    
-                    # Center map on robot
-                    fig.update_layout(
-                        mapbox=dict(
-                            center=dict(lat=robot_location["lat"], lon=robot_location["lng"]),
-                            zoom=15
-                        )
-                    )
-                
-                # Add route line
-                if route and len(route) > 1:
-                    lats = [point["lat"] for point in route]
-                    lons = [point["lng"] for point in route]
-                    
-                    fig.add_trace(go.Scattermapbox(
-                        lat=lats,
-                        lon=lons,
-                        mode="lines",
-                        line=dict(width=4, color="blue"),
-                        name="Route"
-                    ))
-                
-                # Add destination marker
-                if route and len(route) > 0:
-                    destination = route[-1]
-                    fig.add_trace(go.Scattermapbox(
-                        lat=[destination["lat"]],
-                        lon=[destination["lng"]],
-                        mode="markers",
-                        marker=dict(size=12, color="green"),
-                        name="Destination"
-                    ))
-                
-                # Add origin marker (store)
-                if route and len(route) > 0:
-                    origin = route[0]
-                    fig.add_trace(go.Scattermapbox(
-                        lat=[origin["lat"]],
-                        lon=[origin["lng"]],
-                        mode="markers",
-                        marker=dict(size=12, color="blue"),
-                        name="Store"
-                    ))
+                update_data = json.loads(socket_update)
+                if isinstance(update_data, dict) and update_data.get("robot_delivery"):
+                    active_delivery = update_data
+                    print(f"Got delivery data from socket update: {update_data.get('id')}")
             except Exception as e:
-                print(f"Error updating robot map: {e}")
+                print(f"Error parsing socket update for delivery: {e}")
+        
+        # If no active delivery from socket update, check the delivery store
+        if not active_delivery and delivery_data:
+            try:
+                active_delivery = json.loads(delivery_data) if isinstance(delivery_data, str) else delivery_data
+                print(f"Using delivery data from store: {active_delivery.get('order_id')}")
+            except Exception as e:
+                print(f"Error parsing delivery store data: {e}")
+        
+        # If still no active delivery, check if user has an active order with delivery
+        if not active_delivery and user_data and "active_order" in user_data:
+            active_order = user_data["active_order"]
+            if isinstance(active_order, dict) and active_order.get("delivery_type", "").lower() == "delivery":
+                active_delivery = active_order
+                print(f"Using active order as delivery: {active_order.get('id')}")
+        
+        # If we have delivery data, plot the robot and route
+        if active_delivery:
+            try:
+                # Try to get real-time robot location from API
+                from app.utils.robot_api_utils import get_robot_delivery_status
+                
+                order_id = active_delivery.get("id") or active_delivery.get("order_id")
+                if order_id:
+                    status_result = get_robot_delivery_status(order_id=order_id)
+                    
+                    if status_result.get("status") == "success" and status_result.get("data"):
+                        robot_data = status_result["data"]
+                        
+                        # Get robot location
+                        if "location" in robot_data:
+                            robot_location = robot_data["location"]
+                            
+                            # Add robot marker
+                            fig.add_trace(go.Scattermapbox(
+                                lat=[robot_location.get("lat", 37.7749)],
+                                lon=[robot_location.get("lng", -122.4194)],
+                                mode="markers",
+                                marker=dict(size=15, color="red"),
+                                name="Robot"
+                            ))
+                            
+                            # Center map on robot
+                            fig.update_layout(
+                                mapbox=dict(
+                                    center=dict(
+                                        lat=robot_location.get("lat", 37.7749), 
+                                        lon=robot_location.get("lng", -122.4194)
+                                    ),
+                                    zoom=15
+                                )
+                            )
+                        
+                        # Get route coordinates
+                        if "route" in robot_data and len(robot_data["route"]) > 1:
+                            route = robot_data["route"]
+                            
+                            # Add route line
+                            lats = [point.get("lat") for point in route if "lat" in point]
+                            lons = [point.get("lng") for point in route if "lng" in point]
+                            
+                            if lats and lons and len(lats) == len(lons):
+                                fig.add_trace(go.Scattermapbox(
+                                    lat=lats,
+                                    lon=lons,
+                                    mode="lines",
+                                    line=dict(width=4, color="blue"),
+                                    name="Route"
+                                ))
+                            
+                            # Add destination marker
+                            if len(route) > 0:
+                                destination = route[-1]
+                                fig.add_trace(go.Scattermapbox(
+                                    lat=[destination.get("lat")],
+                                    lon=[destination.get("lng")],
+                                    mode="markers",
+                                    marker=dict(size=12, color="green"),
+                                    name="Destination"
+                                ))
+                            
+                            # Add origin marker (store)
+                            if len(route) > 0:
+                                origin = route[0]
+                                fig.add_trace(go.Scattermapbox(
+                                    lat=[origin.get("lat")],
+                                    lon=[origin.get("lng")],
+                                    mode="markers",
+                                    marker=dict(size=12, color="blue"),
+                                    name="Store"
+                                ))
+                else:
+                    print("No order ID available for robot status lookup")
+            except Exception as e:
+                print(f"Error getting robot status: {e}")
+                import traceback
+                traceback.print_exc()
         
         return fig
     
     @app.callback(
-        Output("robot-status-indicators", "children"),
-        [Input("status-update-interval", "n_intervals")]
-    )
-    def update_robot_status_indicators(n_intervals):
-        """Update the robot status indicators"""
-        # In a real app, this would fetch from the robot API
-        # For demo purposes, simulating data
+    Output("robot-status-indicators", "children"),
+    [Input("status-update-interval", "n_intervals"),
+     Input("socket-order-update", "children")],  # Added to update when new orders come in
+    [State("user-store", "data")]  # Added to check active orders
+)
+    def update_robot_status_indicators(n_intervals, socket_update, user_data):
+        """Update the robot status indicators with real data when available"""
         
-        # Generate random battery level that trends downward
-        battery_level = max(0, 100 - (n_intervals % 20) * 5)
+        # Try to get active delivery information
+        active_delivery = None
+        robot_status = "Unknown"
+        battery_level = 0
+        connection_quality = 0
+        eta = "Unknown"
         
-        # Cycle through statuses
-        statuses = ["Idle", "Delivering", "Returning", "Charging"]
-        status = statuses[n_intervals % len(statuses)]
+        # Check socket update for delivery info
+        if socket_update:
+            try:
+                update_data = json.loads(socket_update)
+                if isinstance(update_data, dict) and update_data.get("robot_delivery"):
+                    active_delivery = update_data
+                    print(f"Got delivery data from socket update: {update_data.get('id')}")
+            except Exception as e:
+                print(f"Error parsing socket update for delivery status: {e}")
         
-        # Generate random connection quality (0-100)
-        connection_quality = max(0, min(100, 80 + np.random.randint(-20, 20)))
+        # If no active delivery from socket, check if user has an active order with delivery
+        if not active_delivery and user_data and "active_order" in user_data:
+            active_order = user_data["active_order"]
+            if isinstance(active_order, dict) and active_order.get("delivery_type", "").lower() == "delivery":
+                active_delivery = active_order
+                print(f"Using active order for delivery status: {active_order.get('id')}")
+        
+        # If we have delivery data, get real-time status from API
+        if active_delivery:
+            try:
+                from app.utils.robot_api_utils import get_robot_delivery_status
+                
+                order_id = active_delivery.get("id") or active_delivery.get("order_id")
+                if order_id:
+                    status_result = get_robot_delivery_status(order_id=order_id)
+                    
+                    if status_result.get("status") == "success" and status_result.get("data"):
+                        robot_data = status_result["data"]
+                        
+                        # Extract status information
+                        robot_status = robot_data.get("delivery_status", "Unknown")
+                        battery_level = robot_data.get("battery_level", 80)  # Default to 80% if not provided
+                        connection_quality = robot_data.get("connection_quality", 70)  # Default to 70% if not provided
+                        eta = robot_data.get("eta", "Unknown")
+            except Exception as e:
+                print(f"Error getting robot status for indicators: {e}")
+        else:
+            # If no active delivery, use simulated data or default values
+            # For demo purposes, show simulated data
+            battery_level = max(0, 100 - (n_intervals % 20) * 5)
+            
+            # Cycle through statuses
+            statuses = ["Idle", "Delivering", "Returning", "Charging"]
+            robot_status = statuses[n_intervals % len(statuses)]
+            
+            # Generate random connection quality (0-100)
+            import numpy as np
+            connection_quality = max(0, min(100, 80 + np.random.randint(-20, 20)))
+            
+            # Generate ETA
+            minutes = (n_intervals % 15) + 1
+            eta = f"{minutes} minute{'s' if minutes != 1 else ''}"
         
         # Calculate appropriate colors
         battery_color = "success" if battery_level > 50 else "warning" if battery_level > 20 else "danger"
@@ -135,7 +230,7 @@ def register_callbacks(app, socketio):
             dbc.Row([
                 dbc.Col([
                     html.H5("Robot Status"),
-                    dbc.Badge(status, color="primary", className="py-2 px-3 fs-6 d-block")
+                    dbc.Badge(robot_status, color="primary", className="py-2 px-3 fs-6 d-block")
                 ], md=4),
                 dbc.Col([
                     html.H5("Battery Level"),
@@ -147,8 +242,22 @@ def register_callbacks(app, socketio):
                     dbc.Progress(value=connection_quality, color=connection_color, className="mb-2"),
                     html.Span(f"{connection_quality}%")
                 ], md=4),
-            ], className="mb-4")
+            ], className="mb-4"),
+            
+            # Add ETA information if available
+            dbc.Row([
+                dbc.Col([
+                    html.H5("Estimated Time of Arrival"),
+                    html.Div([
+                        html.I(className="fas fa-clock me-2"),
+                        html.Span(eta, className="fs-5")
+                    ], className="d-flex align-items-center")
+                ], md=12)
+            ], className="mb-4") if eta and eta != "Unknown" else None
         ]
+        
+        # Filter out None elements
+        indicators = [indicator for indicator in indicators if indicator is not None]
         
         return indicators
     

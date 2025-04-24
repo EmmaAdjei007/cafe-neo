@@ -13,6 +13,8 @@ from datetime import datetime
 
 import chainlit as cl
 from chainlit.element import Element
+from langchain.tools import StructuredTool
+from pydantic import BaseModel
 from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings
 from langchain.memory import ConversationBufferMemory
@@ -44,7 +46,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Constants
 DASHBOARD_URL = os.environ.get('DASHBOARD_URL', 'http://localhost:8050')
-ROBOT_SIMULATOR_URL = os.environ.get('ROBOT_SIMULATOR_URL', 'http://localhost:8051')
+ROBOT_SIMULATOR_URL = os.environ.get('ROBOT_SIMULATOR_URL', 'http://localhost:8001')
 DB_PATH = os.environ.get('DB_PATH', os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'neo_cafe.db'))
 logger.debug(f"Using database at: {DB_PATH}")
 SESSION_TIMEOUT = 1800  # 30 minutes
@@ -53,6 +55,8 @@ SESSION_TIMEOUT = 1800  # 30 minutes
 menu_items = []  # Will be populated in the create_knowledge_base function
 processed_message_ids = set()  # Track processed message IDs to avoid duplicates
 is_floating_chat = False  # Flag to check if running in floating mode
+
+
 
 
 # ----- Database Setup -----
@@ -282,6 +286,223 @@ def create_knowledge_base():
         
         return SimpleRetriever()
 
+
+def send_robot_delivery_request(order_id, delivery_location):
+    """
+    Send a robot delivery request directly to the robot API with enhanced logging
+    
+    Args:
+        order_id (str): The order ID to deliver
+        delivery_location (str): The delivery destination
+        
+    Returns:
+        dict: Response with status and message
+    """
+    print("\n" + "="*80)
+    print("ROBOT DELIVERY REQUEST STARTED")
+    print(f"TIMESTAMP: {datetime.now().isoformat()}")
+    print(f"ORDER ID: {order_id}")
+    print(f"DELIVERY LOCATION: {delivery_location}")
+    print(f"ROBOT_SIMULATOR_URL: {ROBOT_SIMULATOR_URL}")
+    print("="*80)
+    
+    try:
+        # Use the environment variable for the URL, with fallback
+        robot_api_url = f"{ROBOT_SIMULATOR_URL}/api/delivery/start"
+        print(f"ROBOT API URL: {robot_api_url}")
+        
+        # Prepare the payload
+        payload = {
+            "interface_name": "en7",
+            "order_id": order_id,
+            "delivery_location": delivery_location
+        }
+        print(f"ROBOT API PAYLOAD: {json.dumps(payload)}")
+        
+        # Try direct requests approach
+        try:
+            # Make the API call
+            import requests
+            print("SENDING REQUEST TO ROBOT API...")
+            response = requests.post(
+                robot_api_url,
+                headers={'Content-Type': 'application/json'},
+                json=payload,
+                timeout=15  # Increased timeout
+            )
+            
+            # Log the complete response
+            print(f"ROBOT API RESPONSE STATUS: {response.status_code}")
+            print(f"ROBOT API RESPONSE HEADERS: {response.headers}")
+            if hasattr(response, 'text'):
+                print(f"ROBOT API RESPONSE BODY: {response.text[:500]}")
+            
+            # Check if the call was successful
+            if response.status_code in (200, 201, 202):
+                print("ROBOT DELIVERY REQUEST SUCCESSFUL!")
+                print("="*80 + "\n")
+                return {
+                    "status": "success",
+                    "message": f"Robot delivery successfully started for order {order_id}",
+                    "response": response.text if hasattr(response, 'text') else "No response body",
+                    "timestamp": datetime.now().isoformat()
+                }
+            else:
+                print(f"ROBOT DELIVERY REQUEST FAILED! Status code: {response.status_code}")
+                print("="*80 + "\n")
+                return {
+                    "status": "error",
+                    "message": f"Robot API returned non-success code: {response.status_code}",
+                    "response": response.text if hasattr(response, 'text') else "No response body",
+                    "timestamp": datetime.now().isoformat()
+                }
+        except requests.exceptions.ConnectionError as conn_err:
+            print(f"ROBOT DELIVERY CONNECTION ERROR: Could not connect to robot API at {robot_api_url}")
+            print(f"ERROR DETAILS: {str(conn_err)}")
+            print("This is likely because you're on a different network or the robot service is down.")
+            print("The system will fall back to manual delivery.")
+            print("="*80 + "\n")
+            
+            # FALLBACK: Try alternative direct approach
+            try:
+                print("TRYING FALLBACK DIRECT METHOD...")
+                import urllib.request
+                import json as json_lib
+                
+                # Prepare request
+                data = json_lib.dumps(payload).encode('utf-8')
+                req = urllib.request.Request(
+                    robot_api_url,
+                    data=data,
+                    headers={'Content-Type': 'application/json'},
+                    method='POST'
+                )
+                
+                # Send request
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    status_code = response.getcode()
+                    response_body = response.read().decode('utf-8')
+                    
+                    print(f"FALLBACK RESPONSE STATUS: {status_code}")
+                    print(f"FALLBACK RESPONSE BODY: {response_body[:500]}")
+                    
+                    if status_code in (200, 201, 202):
+                        print("FALLBACK ROBOT DELIVERY REQUEST SUCCESSFUL!")
+                        print("="*80 + "\n")
+                        return {
+                            "status": "success",
+                            "message": f"Robot delivery successfully started for order {order_id} (fallback method)",
+                            "response": response_body,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    else:
+                        print(f"FALLBACK ROBOT DELIVERY REQUEST FAILED! Status code: {status_code}")
+                        print("="*80 + "\n")
+                        return {
+                            "status": "error",
+                            "message": f"Fallback robot API returned non-success code: {status_code}",
+                            "response": response_body,
+                            "timestamp": datetime.now().isoformat()
+                        }
+            except Exception as fallback_err:
+                print(f"FALLBACK METHOD ALSO FAILED: {str(fallback_err)}")
+                return {
+                    "status": "error",
+                    "message": "Connection error: Could not reach robot delivery service (both methods failed)",
+                    "error_type": "connection_error",
+                    "error_details": f"{str(conn_err)} | Fallback: {str(fallback_err)}",
+                    "timestamp": datetime.now().isoformat()
+                }
+    except Exception as e:
+        import traceback
+        print(f"UNEXPECTED ERROR IN ROBOT DELIVERY REQUEST: {str(e)}")
+        print("TRACEBACK:")
+        print(traceback.format_exc())
+        print("="*80 + "\n")
+        return {
+            "status": "error",
+            "message": f"Exception while requesting robot delivery: {str(e)}",
+            "error_type": "unexpected_error",
+            "error_details": traceback.format_exc(),
+            "timestamp": datetime.now().isoformat()
+        }
+
+def check_robot_api_connection():
+    """
+    Check if the robot API is accessible with improved logging
+    
+    Returns:
+        bool: True if accessible, False otherwise
+    """
+    print("\n" + "="*80)
+    print("ROBOT API CONNECTION CHECK STARTED")
+    print(f"TIMESTAMP: {datetime.now().isoformat()}")
+    print(f"ROBOT_SIMULATOR_URL: {ROBOT_SIMULATOR_URL}")
+    print("="*80)
+    
+    try:
+        # Try to connect to the robot API
+        import requests
+        try:
+            # First try the status endpoint
+            print("Attempting to connect to robot API status endpoint...")
+            response = requests.get(
+                f"{ROBOT_SIMULATOR_URL}/api/status",
+                timeout=5
+            )
+            print(f"Robot API status endpoint response: {response.status_code}")
+            if response.status_code == 200:
+                print("Robot API is accessible via status endpoint")
+                print("="*80 + "\n")
+                return True
+        except Exception as e:
+            print(f"Status endpoint error: {str(e)}")
+            
+        # If status endpoint fails, try the main URL
+        try:
+            print("Status endpoint failed, trying base URL...")
+            response = requests.get(
+                ROBOT_SIMULATOR_URL,
+                timeout=5
+            )
+            print(f"Robot API base URL response: {response.status_code}")
+            if response.status_code == 200:
+                print("Robot API base URL is accessible")
+                print("="*80 + "\n")
+                return True
+        except Exception as e:
+            print(f"Base URL error: {str(e)}")
+            
+        # If both fail, try a test delivery request
+        try:
+            print("Both status and base URL failed, trying a test delivery request...")
+            test_payload = {
+                "interface_name": "en7",
+                "order_id": "TEST-CONNECTION",
+                "delivery_location": "API Test"
+            }
+            response = requests.post(
+                f"{ROBOT_SIMULATOR_URL}/api/delivery/start",
+                headers={'Content-Type': 'application/json'},
+                json=test_payload,
+                timeout=5
+            )
+            print(f"Robot API test delivery response: {response.status_code}")
+            
+            result = response.status_code in (200, 201, 202, 400, 422)  # 400/422 could mean invalid data but API is up
+            print(f"Robot API connection result: {'SUCCESS' if result else 'FAILED'}")
+            print("="*80 + "\n")
+            return result
+        except Exception as e:
+            print(f"Test delivery error: {str(e)}")
+            print("="*80 + "\n")
+            return False
+            
+    except Exception as e:
+        print(f"Robot API connection check failed: {str(e)}")
+        print("="*80 + "\n")
+        return False
+
 # ----- Order Management System -----
 
 class OrderManager:
@@ -339,7 +560,7 @@ class OrderManager:
                         
                         # Check if this was just a confirmation message
                         if isinstance(parsed_data, dict) and parsed_data.get("is_confirmation", False):
-                            print("Parse_order_text detected confirmation-only message")
+                            print("parse_order_text detected confirmation-only message")
                             return {
                                 "status": "confirmation_only",
                                 "message": "Please confirm that you want to finalize your order as is.",
@@ -359,11 +580,7 @@ class OrderManager:
                         # Special handling for "classic latte" in direct text
                         if "classic latte" in text_lower:
                             # Find latte in menu
-                            latte_item = None
-                            for menu_item in menu_items:
-                                if menu_item["name"].lower() == "latte":
-                                    latte_item = menu_item
-                                    break
+                            latte_item = next((mi for mi in menu_items if mi["name"].lower() == "latte"), None)
                             
                             if latte_item:
                                 # Create a special order for classic latte
@@ -406,7 +623,6 @@ class OrderManager:
                                     raise ValueError("No menu items found in text and couldn't parse as JSON")
             
             # Step 2: Check for required details
-            # Check for items first
             if not isinstance(order_data, dict):
                 raise ValueError(f"Invalid order data type: {type(order_data)}")
                 
@@ -432,20 +648,20 @@ class OrderManager:
                     elif "name" in item:
                         # Find item by name
                         found = False
-                        for menu_item in menu_items:
+                        for mi in menu_items:
                             # Handle "Classic Latte" case specially
-                            if "classic" in item["name"].lower() and "latte" in item["name"].lower() and menu_item["name"].lower() == "latte":
+                            if "classic" in item["name"].lower() and "latte" in item["name"].lower() and mi["name"].lower() == "latte":
                                 standardized_items.append({
-                                    "item_id": menu_item["id"],
+                                    "item_id": mi["id"],
                                     "quantity": item.get("quantity", 1),
                                     "special_instructions": "Classic style"
                                 })
                                 found = True
                                 break
                             # Regular case
-                            elif menu_item["name"].lower() == item["name"].lower():
+                            elif mi["name"].lower() == item["name"].lower():
                                 standardized_items.append({
-                                    "item_id": menu_item["id"],
+                                    "item_id": mi["id"],
                                     "quantity": item.get("quantity", 1),
                                     "special_instructions": item.get("special_instructions", "")
                                 })
@@ -458,14 +674,14 @@ class OrderManager:
                             best_score = 0
                             item_name_lower = item["name"].lower()
                             
-                            for menu_item in menu_items:
-                                menu_name = menu_item["name"].lower()
+                            for mi in menu_items:
+                                menu_name = mi["name"].lower()
                                 # Check if item name contains menu item name or vice versa
                                 if menu_name in item_name_lower or item_name_lower in menu_name:
                                     score = len(menu_name) if menu_name in item_name_lower else len(item_name_lower)
                                     if score > best_score:
                                         best_score = score
-                                        best_match = menu_item
+                                        best_match = mi
                             
                             if best_match:
                                 print(f"Fuzzy matched '{item['name']}' to '{best_match['name']}'")
@@ -477,20 +693,20 @@ class OrderManager:
                 elif isinstance(item, str):
                     # Find item by name
                     found = False
-                    for menu_item in menu_items:
+                    for mi in menu_items:
                         # Special case for Classic Latte
-                        if "classic latte" == item.lower() and menu_item["name"].lower() == "latte":
+                        if "classic latte" == item.lower() and mi["name"].lower() == "latte":
                             standardized_items.append({
-                                "item_id": menu_item["id"],
+                                "item_id": mi["id"],
                                 "quantity": 1,
                                 "special_instructions": "Classic style"
                             })
                             found = True
                             break
                         # Regular case
-                        elif menu_item["name"].lower() == item.lower():
+                        elif mi["name"].lower() == item.lower():
                             standardized_items.append({
-                                "item_id": menu_item["id"],
+                                "item_id": mi["id"],
                                 "quantity": 1,
                                 "special_instructions": ""
                             })
@@ -503,14 +719,14 @@ class OrderManager:
                         best_score = 0
                         item_lower = item.lower()
                         
-                        for menu_item in menu_items:
-                            menu_name = menu_item["name"].lower()
+                        for mi in menu_items:
+                            menu_name = mi["name"].lower()
                             # Check if item name contains menu item name or vice versa
                             if menu_name in item_lower or item_lower in menu_name:
                                 score = len(menu_name) if menu_name in item_lower else len(item_lower)
                                 if score > best_score:
                                     best_score = score
-                                    best_match = menu_item
+                                    best_match = mi
                         
                         if best_match:
                             print(f"Fuzzy matched '{item}' to '{best_match['name']}'")
@@ -519,7 +735,6 @@ class OrderManager:
                                 "quantity": 1,
                                 "special_instructions": ""
                             })
-                            
             if standardized_items:
                 order_data["items"] = standardized_items
             
@@ -536,16 +751,14 @@ class OrderManager:
                 
             # Check for delivery location based on type
             if not order_data.get("delivery_location"):
-                delivery_type_lower = order_data.get("delivery_type").lower()
-                if delivery_type_lower in ["dine-in", "dine in", "dinein"]:
+                delivery_type_lower = order_data.get("delivery_type", "").lower()
+                if "dine" in delivery_type_lower:
                     # Check if table number is already in delivery_type description
-                    # Extract table number if possible
                     if "table" in delivery_type_lower:
                         table_parts = delivery_type_lower.split("table")
                         if len(table_parts) > 1 and table_parts[1].strip().isdigit():
                             order_data["delivery_location"] = f"Table {table_parts[1].strip()}"
                             print(f"Extracted table number from delivery_type: {order_data['delivery_location']}")
-                    # If still no delivery_location, prompt for table number
                     if not order_data.get("delivery_location"):
                         return {
                             "status": "incomplete",
@@ -553,15 +766,15 @@ class OrderManager:
                             "missing_field": "delivery_location",
                             "order_so_far": order_data
                         }
-                elif delivery_type_lower in ["delivery", "deliver"]:
+                elif "delivery" in delivery_type_lower:
                     return {
                         "status": "incomplete",
                         "message": "What address would you like your order delivered to?",
                         "missing_field": "delivery_location",
                         "order_so_far": order_data
                     }
-                elif delivery_type_lower in ["pickup", "pick-up", "pick up", "takeout", "take-out", "take out"]:
-                    # For pickup, use default location
+                else:
+                    # For pickup, takeout, etc.
                     order_data["delivery_location"] = "Pickup Counter"
             
             # Check for payment method
@@ -572,9 +785,7 @@ class OrderManager:
                     "missing_field": "payment_method",
                     "order_so_far": order_data
                 }
-                
             
-
             # Add verification step if all required fields are present but verification_complete is not set
             if not order_data.get("verification_complete", False):
                 # Generate order ID during verification if not present
@@ -588,7 +799,6 @@ class OrderManager:
                 total_price = 0
                 
                 for item in order_data.get("items", []):
-                    # Find item details for display
                     item_id = item.get("item_id")
                     quantity = item.get("quantity", 1)
                     
@@ -603,12 +813,11 @@ class OrderManager:
                     else:
                         items_summary.append(f"{quantity}x Item #{item_id}")
                 
-                # Format delivery details
                 delivery_type = order_data.get("delivery_type", "").capitalize()
                 delivery_location = order_data.get("delivery_location", "")
                 payment_method = order_data.get("payment_method", "")
                 
-                # Create verification message
+                # Create verification message (fixing the undefined variable issue)
                 verification_message = f"Your order summary:\n\n"
                 verification_message += "• " + "\n• ".join(items_summary) + "\n\n"
                 verification_message += f"Total: ${total_price:.2f}\n"
@@ -617,61 +826,16 @@ class OrderManager:
                 verification_message += f"Payment: {payment_method}\n\n"
                 verification_message += "Would you like to add anything else to your order, confirm it as is, or cancel the order?"
                 
+                # Store total in order_data for future use
+                order_data["total"] = total_price
+                
                 # IMPORTANT: Update cart items for Dash app during verification
                 try:
-                    # REPLACE EVERYTHING FROM HERE...
-                    # Calculate the total price
-                    total_price = 0
-                    for item in order_data["items"]:
-                        item_id = item.get("item_id")
-                        quantity = item.get("quantity", 1)
-                        # Find item price
-                        for menu_item in menu_items:
-                            if menu_item["id"] == item_id:
-                                total_price += menu_item.get("price", 0) * quantity
-                                break
-                    
-                    # Store total in order_data for future use
-                    order_data["total"] = total_price
-                    
-                    # Format order summary
-                    items_summary = []
-                    for item in order_data.get("items", []):
-                        # Find item details for display
-                        item_id = item.get("item_id")
-                        quantity = item.get("quantity", 1)
-                        
-                        # Find menu item details
-                        menu_item = next((mi for mi in menu_items if mi["id"] == item_id), None)
-                        
-                        if menu_item:
-                            item_name = menu_item["name"]
-                            item_price = menu_item.get("price", 0) * quantity
-                            items_summary.append(f"{quantity}x {item_name} (${item_price:.2f})")
-                        else:
-                            items_summary.append(f"{quantity}x Item #{item_id}")
-                    
-                    # Format delivery details
-                    delivery_type = order_data.get("delivery_type", "").capitalize()
-                    delivery_location = order_data.get("delivery_location", "")
-                    payment_method = order_data.get("payment_method", "")
-                    
-                    # Create verification message
-                    verification_message = f"Your order summary:\n\n"
-                    verification_message += "• " + "\n• ".join(items_summary) + "\n\n"
-                    verification_message += f"Total: ${total_price:.2f}\n"
-                    verification_message += f"Type: {delivery_type}\n"
-                    verification_message += f"Location: {delivery_location}\n"
-                    verification_message += f"Payment: {payment_method}\n\n"
-                    verification_message += "Would you like to add anything else to your order, confirm it as is, or cancel the order?"
-                    
-                    # CRITICAL FIX: Create cart-friendly format with total included
+                    # Create cart-friendly format with total included
                     cart_items = []
                     for item in order_data["items"]:
                         item_id = item.get("item_id")
                         quantity = item.get("quantity", 1)
-                        
-                        # Find menu item details
                         menu_item = next((m for m in menu_items if m["id"] == item_id), None)
                         if menu_item:
                             cart_items.append({
@@ -682,7 +846,6 @@ class OrderManager:
                                 "special_instructions": item.get("special_instructions", "")
                             })
                     
-                    # Create cart-specific message WITH TOTAL
                     cart_update = {
                         "type": "cart_update",
                         "items": cart_items,
@@ -694,23 +857,20 @@ class OrderManager:
                     
                     # Use the updated helper function to update the UI with the total
                     update_chat_ui_with_order(order_data)
-                    # ...TO HERE
                 except Exception as cart_err:
                     print(f"Error updating cart during verification: {cart_err}")
                 
-                # Return verification request
                 return {
                     "status": "verification",
                     "message": verification_message,
                     "order_so_far": order_data
                 }
-                
+            
             # Step 4: All details are present, continue with order processing
             
             # Generate order ID if not present
             if "id" not in order_data:
-                order_id = f"ORD-{uuid.uuid4().hex[:8].upper()}"
-                order_data["id"] = order_id
+                order_data["id"] = f"ORD-{uuid.uuid4().hex[:8].upper()}"
             
             # Add context data
             context = cl.user_session.get("context", {})
@@ -725,7 +885,6 @@ class OrderManager:
                     order_data["username"] = "guest"
                     print("Using guest user ID for unauthenticated order")
             
-            # Make sure username field is also set for compatibility with Dash
             if "username" not in order_data and "user_id" in order_data:
                 order_data["username"] = order_data["user_id"]
                 
@@ -738,7 +897,6 @@ class OrderManager:
                 for item in order_data["items"]:
                     item_id = item.get("item_id")
                     quantity = item.get("quantity", 1)
-                    # Find item price
                     for menu_item in menu_items:
                         if menu_item["id"] == item_id:
                             total += menu_item.get("price", 0) * quantity
@@ -764,89 +922,91 @@ class OrderManager:
                 print(f"Database error: {db_error}")
             
             # Step 6: Notify dashboard and update cart
-            success = False
             try:
-                # CRITICAL: Update cart items for Dash app - this is required for cart integration
-                # Create cart-friendly format
-                cart_items = []
-                for item in order_data["items"]:
-                    item_id = item.get("item_id")
-                    quantity = item.get("quantity", 1)
-                    
-                    # Find menu item details
-                    menu_item = next((m for m in menu_items if m["id"] == item_id), None)
-                    if menu_item:
-                        cart_items.append({
-                            "id": item_id,
-                            "name": menu_item["name"],
-                            "price": menu_item.get("price", 0),
-                            "quantity": quantity,
-                            "special_instructions": item.get("special_instructions", "")
-                        })
+                success = False
                 
-                # Create cart-specific message
-                cart_update = {
-                    "type": "cart_update",
-                    "items": cart_items,
-                    "order_id": order_data["id"],
-                    "username": order_data.get("username", "guest"),
-                    "user_id": order_data.get("user_id", "guest"),
-                    "total": order_data.get("total", 0)  # Add the total from order_data
-                }
-                
-                # METHOD 1: Try Socket.IO first
+                # METHOD 1: Socket.IO first
                 try:
                     import socketio
                     sio = socketio.Client()
                     sio.connect(DASHBOARD_URL)
-                    # Send both general order update and specific cart update
                     sio.emit('order_update', order_data)
-                    sio.emit('cart_update', cart_update)
+                    sio.emit('cart_update', {
+                        "type": "cart_update",
+                        "items": [
+                            {
+                                "id": item["item_id"],
+                                "name": next((m["name"] for m in menu_items if m["id"] == item["item_id"]), ""),
+                                "price": next((m["price"] for m in menu_items if m["id"] == item["item_id"]), 0),
+                                "quantity": item["quantity"],
+                                "special_instructions": item.get("special_instructions", "")
+                            }
+                            for item in order_data["items"]
+                        ],
+                        "order_id": order_data["id"],
+                        "username": order_data.get("username", "guest"),
+                        "user_id": order_data.get("user_id", "guest"),
+                        "total": order_data.get("total", 0)
+                    })
                     sio.disconnect()
                     print("Order sent via Socket.IO")
                     success = True
                 except Exception as e:
                     print(f"Error sending order via Socket.IO: {e}")
-                    success = False
                 
-                # METHOD 2: Try parent window messaging
+                # METHOD 2: Parent window messaging
                 try:
-                    # Send order update to parent window
                     cl.send_to_parent({
                         "type": "order_update", 
                         "order": order_data
                     })
-                    
-                    # CRITICAL: Also send cart_update event specifically
                     cl.send_to_parent({
                         "type": "cart_update",
-                        "items": cart_items,
+                        "items": [
+                            {
+                                "id": item["item_id"],
+                                "name": next((m["name"] for m in menu_items if m["id"] == item["item_id"]), ""),
+                                "price": next((m["price"] for m in menu_items if m["id"] == item["item_id"]), 0),
+                                "quantity": item["quantity"],
+                                "special_instructions": item.get("special_instructions", "")
+                            }
+                            for item in order_data["items"]
+                        ],
                         "order_id": order_data["id"],
-                        "total": order_data.get("total", 0)  # IMPORTANT: Include the total here
+                        "total": order_data.get("total", 0)
                     })
-                    
                     print("Order notification sent to parent")
                     success = True
                 except Exception as e:
                     print(f"Error sending order via cl.send_to_parent: {e}")
                 
-                # METHOD 3: Try REST API approach
+                # METHOD 3: REST API approach
                 if not success:
                     try:
-                        # Call the place-order API endpoint
                         order_response = requests.post(
                             f"{DASHBOARD_URL}/api/place-order", 
                             json=order_data,
                             timeout=5
                         )
-                        
-                        # Call the update-cart API endpoint
                         cart_response = requests.post(
                             f"{DASHBOARD_URL}/api/update-cart", 
-                            json=cart_update,
+                            json={
+                                "type": "cart_update",
+                                "items": [
+                                    {
+                                        "id": item["item_id"],
+                                        "name": next((m["name"] for m in menu_items if m["id"] == item["item_id"]), ""),
+                                        "price": next((m["price"] for m in menu_items if m["id"] == item["item_id"]), 0),
+                                        "quantity": item["quantity"],
+                                        "special_instructions": item.get("special_instructions", "")
+                                    }
+                                    for item in order_data["items"]
+                                ],
+                                "order_id": order_data["id"],
+                                "total": order_data.get("total", 0)
+                            },
                             timeout=5
                         )
-                        
                         if order_response.status_code == 200 or cart_response.status_code == 200:
                             print(f"Order API response: {order_response.status_code}, Cart API response: {cart_response.status_code}")
                             success = True
@@ -855,13 +1015,27 @@ class OrderManager:
                     except Exception as api_err:
                         print(f"Error calling REST API: {api_err}")
                 
-                # METHOD 4: Also try the file-based approach as last resort
+                # METHOD 4: File-based fallback
                 try:
                     os.makedirs('order_data', exist_ok=True)
                     with open(f"order_data/order_{order_data['id']}.json", 'w') as f:
                         json.dump(order_data, f)
                     with open(f"order_data/cart_{order_data['id']}.json", 'w') as f:
-                        json.dump(cart_update, f)
+                        json.dump({
+                            "type": "cart_update",
+                            "items": [
+                                {
+                                    "id": item["item_id"],
+                                    "name": next((m["name"] for m in menu_items if m["id"] == item["item_id"]), ""),
+                                    "price": next((m["price"] for m in menu_items if m["id"] == item["item_id"]), 0),
+                                    "quantity": item["quantity"],
+                                    "special_instructions": item.get("special_instructions", "")
+                                }
+                                for item in order_data["items"]
+                            ],
+                            "order_id": order_data["id"],
+                            "total": order_data.get("total", 0)
+                        }, f)
                     print(f"Order saved to file: order_{order_data['id']}.json")
                 except Exception as e:
                     print(f"Error saving order to file: {e}")
@@ -871,35 +1045,221 @@ class OrderManager:
                 context["active_order"] = order_data
                 context["delivery_location"] = order_data.get("delivery_location", "Table 1")
                 cl.user_session.set("context", context)
-                
-                # Important: Clear the order_in_progress state now that order is complete
                 cl.user_session.set("order_in_progress", None)
                 
-                # Return success message
-                return {
+                # Build and return the success response
+                order_response = {
                     "status": "success",
                     "message": f"Your order has been placed! Order #{order_data['id']}. Your {order_data.get('delivery_type', 'order')} will be ready soon.",
                     "order": order_data
                 }
+                
+                # Check if this order requires delivery (robot or standard)
+                print("\n" + "*"*80)
+                print("DELIVERY TYPE CHECK FOR ROBOT DELIVERY")
+                print(f"TIMESTAMP: {datetime.now().isoformat()}")
+                print(f"ORDER ID: {order_data['id']}")
+                print(f"DELIVERY TYPE: '{order_data.get('delivery_type', 'None')}'")
+                print(f"DELIVERY LOCATION: '{order_data.get('delivery_location', 'None')}'")
+                print("*"*80)
+
+                delivery_type_lower = str(order_data.get("delivery_type", "")).lower()
+                robot_delivery_requested = False
+                robot_delivery_success = False
+
+                # First check if this is explicitly a robot delivery request
+                robot_delivery_terms = [
+                    "robot", "robot delivery", "robot-delivery", "delivery-robot", "automated",
+                    "robo", "autonomous", "robotic"
+                ]
+
+                if any(term in delivery_type_lower for term in robot_delivery_terms):
+                    robot_delivery_requested = True
+                    print(f"ROBOT DELIVERY EXPLICITLY REQUESTED for order {order_data['id']}")
+                    
+                    # Attempt robot delivery
+                    try:
+                        print(f"Attempting robot delivery for order {order_data['id']} to {order_data.get('delivery_location', '')}")
+                        
+                        # Call our robot delivery function
+                        delivery_result = send_robot_delivery_request(
+                            order_id=order_data["id"],
+                            delivery_location=order_data.get("delivery_location", "")
+                        )
+                        
+                        print(f"Robot delivery attempt complete. Result: {delivery_result.get('status', 'unknown')}")
+                        
+                        # Check if the call was successful
+                        if delivery_result.get("status") == "success":
+                            robot_delivery_success = True
+                            order_data["robot_delivery"] = True
+                            order_data["delivery_status"] = "in_progress"
+                            
+                            # Modify the response message to include robot delivery info
+                            if "message" in order_response:
+                                order_response["message"] += "\n\nA robot has been dispatched to deliver your order. You can track the delivery status in the Delivery section."
+                                print("Added robot delivery success message to response")
+                        else:
+                            # Robot delivery API call failed
+                            error_msg = delivery_result.get("message", "Unknown error")
+                            print(f"Robot delivery API call failed: {error_msg}")
+                            if "message" in order_response:
+                                order_response["message"] += "\n\nHowever, there was an issue with the robot delivery service. Our staff will handle your delivery manually."
+                                print("Added robot delivery failure message to response")
+                    except Exception as e:
+                        print(f"ERROR HANDLING ROBOT DELIVERY: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        if "message" in order_response:
+                            order_response["message"] += "\n\nHowever, there was an issue with the robot delivery service. Our staff will handle your delivery manually."
+                            print("Added robot delivery error message to response")
+
+                # If this is any type of delivery, use robot delivery
+                elif "delivery" in delivery_type_lower:
+                    print(f"STANDARD DELIVERY REQUESTED, USING ROBOT DELIVERY AS DEFAULT")
+                    
+                    # Use robot delivery for all delivery types
+                    try:
+                        # Call robot delivery and update UI accordingly
+                        print(f"Attempting robot delivery for standard delivery order {order_data['id']}")
+                        delivery_result = send_robot_delivery_request(
+                            order_id=order_data["id"],
+                            delivery_location=order_data.get("delivery_location", "")
+                        )
+                        
+                        print(f"Robot API call for standard delivery: {delivery_result.get('status', 'unknown')}")
+                        
+                        # If successful, update UI to show robot delivery
+                        if delivery_result.get("status") == "success":
+                            robot_delivery_success = True
+                            order_data["robot_delivery"] = True
+                            order_data["delivery_status"] = "in_progress"
+                            
+                            # Update the response message to include robot delivery info
+                            if "message" in order_response:
+                                order_response["message"] += "\n\nA robot has been dispatched to deliver your order. You can track the delivery status in the Delivery section."
+                                print("Added robot delivery success message to standard delivery response")
+                        else:
+                            # Robot delivery API call failed for standard delivery
+                            error_msg = delivery_result.get("message", "Unknown error")
+                            print(f"Robot delivery API call failed for standard delivery: {error_msg}")
+                            if "message" in order_response:
+                                order_response["message"] += "\n\nDelivery will be handled by our staff."
+                                print("Added standard delivery message to response due to robot failure")
+                    except Exception as e:
+                        print(f"ERROR HANDLING ROBOT DELIVERY FOR STANDARD DELIVERY: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        if "message" in order_response:
+                            order_response["message"] += "\n\nDelivery will be handled by our staff."
+                            print("Added standard delivery message to response due to exception")
+                else:
+                    print(f"NOT A DELIVERY ORDER. No robot delivery attempted for order type: {delivery_type_lower}")
+
+                # Update the order data with robot delivery status for UI display
+                if "delivery" in delivery_type_lower:
+                    try:
+                        # Log to console that we're updating cart with robot status
+                        print(f"Updating cart with robot delivery status: {robot_delivery_success}")
+                        
+                        # Update cart_update data to include robot delivery info
+                        cart_update = {
+                            "type": "cart_update",
+                            "items": [
+                                {
+                                    "id": item["item_id"],
+                                    "name": next((m["name"] for m in menu_items if m["id"] == item["item_id"]), ""),
+                                    "price": next((m["price"] for m in menu_items if m["id"] == item["item_id"]), 0),
+                                    "quantity": item["quantity"],
+                                    "special_instructions": item.get("special_instructions", "")
+                                }
+                                for item in order_data["items"]
+                            ],
+                            "order_id": order_data["id"],
+                            "username": order_data.get("username", "guest"),
+                            "user_id": order_data.get("user_id", "guest"),
+                            "total": order_data.get("total", 0),
+                            "robot_delivery": robot_delivery_success,
+                            "delivery_status": "in_progress" if robot_delivery_success else "pending"
+                        }
+                        
+                        # Send to parent window if we can
+                        try:
+                            cl.send_to_parent({
+                                "type": "cart_update",
+                                "items": cart_update["items"],
+                                "order_id": cart_update["order_id"],
+                                "total": cart_update["total"],
+                                "robot_delivery": robot_delivery_success,
+                                "delivery_status": "in_progress" if robot_delivery_success else "pending"
+                            })
+                            
+                            # Also send a specific robot delivery update
+                            if robot_delivery_success:
+                                cl.send_to_parent({
+                                    "type": "robot_delivery_started",
+                                    "order_id": order_data["id"],
+                                    "delivery_location": order_data.get("delivery_location", ""),
+                                    "status": "in_progress"
+                                })
+                            
+                            print("Robot delivery status sent to parent window")
+                        except Exception as e:
+                            print(f"Error sending to parent window: {e}")
+                    except Exception as e:
+                        print(f"Error updating UI with robot delivery status: {e}")
+
+                # Add a summary log at the end
+                print(f"DELIVERY CHECK SUMMARY FOR ORDER {order_data['id']}:")
+                print(f"- Robot delivery requested: {robot_delivery_requested}")
+                print(f"- Robot delivery successful: {robot_delivery_success}")
+                print(f"- Order delivery type: {delivery_type_lower}")
+                print(f"- Order delivery status: {order_data.get('delivery_status', 'not set')}")
+                print("*"*80 + "\n")
+                
+                return order_response
             
-            except Exception as e:
-                print(f"Error in notification: {e}")
-                # Return basic order info
-                return {
+            except Exception as notify_err:
+                print(f"Error in notification: {notify_err}")
+                # Return basic success response
+                order_response = {
                     "status": "success",
                     "message": f"Order placed! Your total is ${order_data.get('total', 0):.2f}",
                     "order": order_data
                 }
                 
+                # Robot delivery logic (fallback)
+                if "delivery" in order_data.get("delivery_type", "").lower():
+                    delivery_result = send_robot_delivery_request(
+                        order_id=order_data["id"],
+                        delivery_location=order_data.get("delivery_location", "")
+                    )
+                    if delivery_result.get("status") == "success":
+                        order_data["delivery_status"] = "in_progress"
+                        order_data["robot_delivery"] = True
+                        order_response["message"] += (
+                            "\n\nA robot is being dispatched to deliver your order. "
+                            "You can track the delivery status in the Delivery section."
+                        )
+                        print("Added robot delivery success message to response (fallback)")
+                    else:
+                        print(f"Robot delivery failed but order was placed: {delivery_result.get('message')}")
+                        order_response["message"] += (
+                            "\n\nHowever, there was an issue starting the robot delivery. "
+                            "Our staff will handle your delivery manually."
+                        )
+                        print("Added robot delivery failure message to response (fallback)")
+                
+                return order_response
+        
         except Exception as e:
             print(f"Unexpected error placing order: {e}")
-            import traceback
             traceback.print_exc()
             return {
                 "status": "error",
                 "message": f"I'm sorry, I couldn't process your order: {str(e)}"
             }
-        
+          
     @staticmethod
     def handle_order_response(order_response):
         """
@@ -1004,27 +1364,37 @@ class OrderManager:
             str: Order status information.
         """
         try:
+            # NEW: Check if order_id is a dictionary and extract the ID from it
+            if isinstance(order_id, dict) and 'order_id' in order_id:
+                order_id = order_id['order_id']
+                print(f"Extracted order_id from dictionary: {order_id}")
+            
+            # NEW: Check if order_id has quotes and remove them
+            if isinstance(order_id, str) and order_id.startswith('"') and order_id.endswith('"'):
+                order_id = order_id.strip('"')
+                print(f"Removed quotes from order_id: {order_id}")
+            
             # Check for valid order ID format
             if not order_id or not isinstance(order_id, str):
                 return "Invalid order ID format"
-                
+                    
             # Clean up the order_id
             order_id = order_id.strip().upper()
             if not order_id.startswith("ORD-"):
                 if order_id.isalnum():
                     order_id = f"ORD-{order_id}"
-                    
+                        
             # Query database
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
             c.execute('''SELECT status, items, created_at FROM order_history
-                         WHERE order_id = ?''', (order_id,))
+                        WHERE order_id = ?''', (order_id,))
             result = c.fetchone()
             conn.close()
             
             if not result:
                 return f"No record found for order {order_id}"
-                
+                    
             status, items_json, created_at = result
             items = json.loads(items_json)
             
@@ -1035,14 +1405,14 @@ class OrderManager:
             
             for item in items:
                 item_name = next((menu_item["name"] for menu_item in menu_items 
-                                 if menu_item["id"] == item["item_id"]), f"Item #{item['item_id']}")
+                                if menu_item["id"] == item["item_id"]), f"Item #{item['item_id']}")
                 response += f"- {item['quantity']}x {item_name}\n"
             
             return response
         except Exception as e:
             print(f"Error getting order status: {e}")
             return f"Error retrieving order status: {str(e)}"
-
+        
     @staticmethod
     def update_order(order_id, updates):
         """
@@ -1410,9 +1780,10 @@ Phone: (555) 123-4567
 Email: info@neocafe.com
 """
 
+# Enhanced parse_order_text function to better detect robot delivery requests
 def parse_order_text(text):
     """
-    Parse natural language order text into structured order data with improved detail extraction.
+    Parse natural language order text into structured order data with improved robot delivery detection.
     Args:
         text (str): Natural language order description.
     Returns:
@@ -1448,32 +1819,54 @@ def parse_order_text(text):
             if len(special_parts) > 1:
                 special_instructions_global = f"With {parts[1]}"
         
-        # Extract delivery type
+        # ENHANCED: Extract delivery type with better robot delivery detection
         delivery_type = ""  # Empty to trigger follow-up question
-        delivery_terms = {
-            "dine in": "dine-in",
-            "dine-in": "dine-in", 
-            "dinein": "dine-in",
-            "table": "dine-in",
-            "sit": "dine-in",
-            "restaurant": "dine-in",
-            "pickup": "pickup",
-            "pick up": "pickup",
-            "pick-up": "pickup",
-            "takeout": "pickup",
-            "take out": "pickup",
-            "take-out": "pickup",
-            "to go": "pickup",
-            "delivery": "delivery",
-            "deliver": "delivery", 
-            "bring to": "delivery",
-            "send to": "delivery"
-        }
         
-        for term, dtype in delivery_terms.items():
+        # First explicitly check for robot delivery with expanded terms
+        robot_delivery_terms = [
+            "robot", "robot delivery", "delivery robot", "automated delivery", 
+            "robot courier", "robotic delivery", "drone", "automated", "autonomous delivery",
+            "robot bring", "robot send", "send robot", "deliver with robot", "deliver by robot",
+            "robot-delivery", "delivery-robot", "robot delivery service", "autonomous",
+            "robo delivery", "robo", "ai delivery", "have a robot", "send a robot",
+            # Adding more terms to increase detection
+            "automatic", "automatic delivery", "auto delivery", "robotic", "bot",
+            "delivery bot", "smart delivery", "tech delivery", "high tech"
+        ]
+        
+        # Check if any robot delivery term is in the text
+        for term in robot_delivery_terms:
             if term in text_lower:
-                delivery_type = dtype
+                print(f"Detected robot delivery term: '{term}' in text")
+                delivery_type = "robot-delivery"
                 break
+        
+        # If no explicit robot delivery term found, check for other delivery types
+        if not delivery_type:
+            delivery_terms = {
+                "dine in": "dine-in",
+                "dine-in": "dine-in", 
+                "dinein": "dine-in",
+                "table": "dine-in",
+                "sit": "dine-in",
+                "restaurant": "dine-in",
+                "pickup": "pickup",
+                "pick up": "pickup",
+                "pick-up": "pickup",
+                "takeout": "pickup",
+                "take out": "pickup",
+                "take-out": "pickup",
+                "to go": "pickup",
+                "delivery": "delivery",
+                "deliver": "delivery", 
+                "bring to": "delivery",
+                "send to": "delivery"
+            }
+            
+            for term, dtype in delivery_terms.items():
+                if term in text_lower:
+                    delivery_type = dtype
+                    break
         
         # Extract delivery location
         delivery_location = ""
@@ -1498,7 +1891,7 @@ def parse_order_text(text):
                         break
         
         # IMPROVED ADDRESS EXTRACTION for delivery
-        elif delivery_type == "delivery":
+        elif delivery_type in ["delivery", "robot-delivery"]:
             address_indicators = ["deliver to", "delivery to", "send to", "bring to", "address", "location", "at"]
             for indicator in address_indicators:
                 if indicator in text_lower:
@@ -1664,12 +2057,15 @@ def parse_order_text(text):
                             "quantity": 1,
                             "special_instructions": ""
                         })
-        
+                            
         if not order_items:
             raise ValueError("No menu items found in order text")
         
+        # Print a detailed message about the final parsed order
+        print(f"PARSED ORDER: delivery_type={delivery_type}, items={len(order_items)} items, location={delivery_location}")
+        
         # Build the order structure with enhanced details
-        return {
+        parsed_order = {
             "user_id": context.get("user_id", "guest"),
             "items": order_items,
             "delivery_type": delivery_type,
@@ -1677,13 +2073,27 @@ def parse_order_text(text):
             "payment_method": payment_method,
             "special_instructions": special_instructions_global
         }
+        
+        # If robot delivery was detected, explicitly add a flag
+        if delivery_type == "robot-delivery":
+            parsed_order["robot_delivery"] = True
+            print("Added explicit robot_delivery flag to parsed order")
+        
+        # If this is any type of delivery, assume robot delivery
+        if parsed_order.get("delivery_type", "").lower() == "delivery":
+            # Update to specify robot delivery
+            parsed_order["delivery_type"] = "robot-delivery"
+            parsed_order["robot_delivery"] = True
+            print("Set delivery type to robot-delivery for standard delivery order")
+        
+        return parsed_order
     except ValueError as e:
         print(f"Parse order error details: {e}")
         raise ValueError(f"Could not parse order text: {str(e)}")
     except Exception as e:
         print(f"Parse order error details: {e}")
         raise ValueError(f"Could not parse order text: {str(e)}")
-    
+        
 def query_knowledge_base(query):
     """
     Query the vector store for relevant information.
@@ -1927,9 +2337,14 @@ def initialize_agent_safely(context):
                 else:
                     memory.chat_memory.add_ai_message(msg["content"])
             logger.debug(f"Loaded {len(history)} messages from history")
-        
-        # Define tools
+
+        # Define tools with updated wrappers
         tools = [
+            Tool(
+                name="RobotDeliveryTool",
+                func=handle_robot_delivery_request,  # Use the wrapper
+                description="Request robot delivery for an existing order. Requires order_id and delivery_location."
+            ),
             Tool(
                 name="NavigateTool",
                 func=navigate_to_page,
@@ -1953,7 +2368,7 @@ def initialize_agent_safely(context):
             ),
             Tool(
                 name="GetOrderStatusTool",
-                func=OrderManager.get_order_status,
+                func=order_status_wrapper,  # Use the updated wrapper
                 description="Check the status of an order by order ID"
             ),
             Tool(
@@ -2079,7 +2494,7 @@ def setup_langchain_agent(context):
                 else:
                     memory.chat_memory.add_ai_message(msg["content"])
         
-        # Define tools
+        # Define tools including the robot delivery tool
         tools = [
             Tool(
                 name="NavigateTool",
@@ -2098,8 +2513,14 @@ def setup_langchain_agent(context):
             ),
             Tool(
                 name="PlaceOrderTool",
-                func=OrderManager.place_order,
-                description="Place an order with Neo Cafe. Expects either a JSON string or natural language order description"
+                func=lambda x: OrderManager.handle_order_response(OrderManager.place_order(x)),
+                description="""Place an order with Neo Cafe. Expects either a JSON string or natural language order description.
+                            IMPORTANT: You must gather all the required details before placing an order:
+                            1. Items to order (what food/drinks)
+                            2. Delivery type (dine-in, pickup, delivery, or robot-delivery)
+                            3. Location (table number for dine-in, address for delivery/robot-delivery)
+                            4. Payment method (Credit Card, Cash, or Mobile Payment)
+                            If any of these details are missing, you must ask the customer before proceeding."""
             ),
             Tool(
                 name="GetOrderStatusTool",
@@ -2110,6 +2531,15 @@ def setup_langchain_agent(context):
                 name="UpdateOrderTool",
                 func=lambda x: OrderManager.update_order(*json.loads(x)),
                 description="Update an existing order. Format: JSON string with order_id and updates object"
+            ),
+            Tool(
+                name="RobotDeliveryTool",
+                func=request_robot_delivery,
+                description="""Request robot delivery for an order. Accepts a JSON string with:
+                order_id: The ID of the order to deliver
+                delivery_location: The delivery address
+                Example: {"order_id": "ORD-123456", "delivery_location": "123 Main St, Apt 4"}
+                Use this tool when a customer specifically requests robot delivery for an order."""
             ),
             Tool(
                 name="StoreHoursTool",
@@ -2130,7 +2560,7 @@ def setup_langchain_agent(context):
         floating = context.get("is_floating", False)
         has_active_order = "active_order" in context
         
-        # System message with enhanced personalization
+        # System message with enhanced personalization and robot delivery emphasis
         system_message = f"""You are BaristaBot, the friendly AI assistant for Neo Cafe. 
 Your goal is to help customers with orders, menu information, and general inquiries.
 
@@ -2152,6 +2582,15 @@ IMPORTANT GUIDELINES:
 8. Remember their preferences and past orders when making recommendations
 9. If they have an active order, offer to check its status
 
+FOR PLACING ORDERS, FOLLOW THIS EXACT PROCESS:
+   a. First ask what items they would like to order and use SearchMenuTool if needed
+   b. Then ask if the order is for dine-in, pickup, or delivery
+   c. If dine-in, ask which table number they're sitting at
+   d. If delivery, ask for the delivery address
+   e. Always ask for payment method preference (Credit Card, Cash, Mobile Payment)
+   f. ONLY after collecting ALL these details should you use PlaceOrderTool
+   g. IMPORTANT: All delivery orders are automatically handled by our robot delivery system
+
 If in floating chat mode, keep responses brief and focused."""
         
         # Define custom prefix using system_message
@@ -2172,6 +2611,7 @@ If in floating chat mode, keep responses brief and focused."""
             verbose=True,
             memory=memory,
             handle_parsing_errors=True,
+            handle_tool_error=True,
             agent_kwargs={
                 'prefix': custom_prefix,
                 'system_message': SystemMessage(content=system_message)
@@ -2217,8 +2657,37 @@ def get_personalized_welcome(context):
 @cl.on_chat_start
 async def start():
     """Initialize chat session with persistent user data"""
-    # Initialize order tracking
-    cl.user_session.set("order_in_progress", None)
+    # Check robot API connection
+    try:
+        print("\n" + "="*80)
+        print("INITIALIZING ROBOT DELIVERY SYSTEM")
+        print(f"TIMESTAMP: {datetime.now().isoformat()}")
+        print("="*80)
+        
+        robot_api_available = check_robot_api_connection()
+        if robot_api_available:
+            logger.debug("Robot API is accessible")
+            
+            # Try a test API call
+            test_result = send_robot_delivery_request(
+                order_id="STARTUP-TEST",
+                delivery_location="API Verification Test"
+            )
+            logger.debug(f"Robot API test call result: {test_result.get('status', 'unknown')}")
+            print(f"ROBOT API INITIALIZATION RESULT: {'SUCCESS' if test_result.get('status') == 'success' else 'FAILED'}")
+            print(f"ROBOT API STATUS: {test_result.get('status', 'unknown')}")
+            print(f"ROBOT API MESSAGE: {test_result.get('message', 'None')}")
+        else:
+            logger.warning("Warning: Robot API is not accessible")
+            print("ROBOT API INITIALIZATION: FAILED - API not accessible")
+        
+        print("="*80 + "\n")
+    except Exception as e:
+        logger.error(f"Error checking robot API connection: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        print(f"ROBOT API INITIALIZATION ERROR: {str(e)}")
+        print("="*80 + "\n")
     
     # Get URL query parameters
     try:
@@ -2328,12 +2797,9 @@ async def start():
 
     # Set up the agent
     try:
-        agent = initialize_agent_safely(context)
-        if agent:
-            cl.user_session.set("agent", agent)
-            logger.debug("Agent setup complete")
-        else:
-            logger.warning("Agent initialization failed, using fallback responses")
+        agent = setup_langchain_agent(context)
+        cl.user_session.set("agent", agent)
+        logger.debug("Agent setup complete")
     except Exception as e:
         logger.error(f"Error setting up agent: {e}")
 
@@ -2358,38 +2824,9 @@ async def start():
         await cl.Message(content="Welcome to Neo Cafe! How can I help you today?").send()
 
 
-
-@cl.on_window_message
-async def handle_window_message(message):
-    """
-    Handle messages from the parent window (Dash app).
-    Args:
-        message: Message content (string or dict).
-    """
-    print(f"Received window message: {message}")
-    actual_message = None
-    message_id = f"window_{time.time()}"
-    
-    if isinstance(message, dict):
-        if 'message' in message:
-            actual_message = message['message']
-            if 'id' in message:
-                message_id = f"window_{message['id']}"
-        elif 'kind' in message and message.get('kind') == 'user_message':
-            if 'data' in message and 'content' in message['data']:
-                actual_message = message['data']['content']
-    elif isinstance(message, str):
-        actual_message = message
-        
-    if actual_message:
-        print(f"Extracted message from window: {actual_message}")
-        await process_message(actual_message, message_id=message_id, source="window")
-    else:
-        print(f"Could not extract message from: {message}")
-
 async def process_message(message, message_id=None, source=None):
     """
-    Process a user message and generate a response with improved order handling
+    Process a user message and generate a response with improved error handling
     
     Args:
         message (str): The user's input message.
@@ -2681,32 +3118,96 @@ async def process_message(message, message_id=None, source=None):
                 await cl.Message(content="I'm still initializing my systems. Please try again in a moment, or you can navigate to our menu page to see what we offer.").send()
             return
 
+    # DIRECT HANDLING for order intent - bypass agent completely for known patterns
+    if "order" in message.lower() and any(item in message.lower() for item in ["latte", "coffee", "cappuccino", "espresso", "croissant", "pastry"]):
+        try:
+            # Parse order from text directly
+            order_items = []
+            if "latte" in message.lower():
+                order_items.append({"item_id": 2, "quantity": 1})  # Latte
+            if "croissant" in message.lower():
+                order_items.append({"item_id": 7, "quantity": 1})  # Croissant
+            if "cappuccino" in message.lower():
+                order_items.append({"item_id": 3, "quantity": 1})  # Cappuccino
+            if "espresso" in message.lower():
+                order_items.append({"item_id": 1, "quantity": 1})  # Espresso
+            
+            # Create order with minimal info to start conversation flow
+            delivery_type = ""
+            if "robot" in message.lower():
+                delivery_type = "robot-delivery"
+            elif "delivery" in message.lower():
+                delivery_type = "delivery"
+            elif "pickup" in message.lower() or "take" in message.lower():
+                delivery_type = "pickup"
+            elif "dine" in message.lower() or "table" in message.lower():
+                delivery_type = "dine-in"
+            
+            # Start order flow
+            order_data = {
+                "items": order_items,
+                "delivery_type": delivery_type
+            }
+            response = OrderManager.place_order(order_data)
+            cl.user_session.set("order_in_progress", response)
+            response_msg = OrderManager.handle_order_response(response)
+            track_message(response_msg, is_user=False)
+            await cl.Message(content=response_msg).send()
+            return
+        except Exception as direct_err:
+            print(f"Direct order handling failed: {direct_err}")
+            # Fall through to agent processing
+    
+    # Direct tool access for common patterns
+    if "status" in message.lower() and "order" in message.lower():
+        # Try to extract an order ID and directly call GetOrderStatusTool
+        import re
+        order_id_match = re.search(r'(ORD-[A-Za-z0-9]+)', message, re.IGNORECASE)
+        if order_id_match:
+            order_id = order_id_match.group(0).upper()
+            print(f"Directly calling GetOrderStatusTool with order_id: {order_id}")
+            try:
+                status_result = OrderManager.get_order_status(order_id)
+                await cl.Message(content=status_result).send()
+                track_message(status_result, is_user=False)
+                return
+            except Exception as tool_err:
+                print(f"Direct tool call error: {tool_err}")
+                # Fall through to normal agent flow
+    
+    if "deliver" in message.lower() and "robot" in message.lower():
+        # Try to extract order ID for robot delivery
+        import re
+        order_id_match = re.search(r'(ORD-[A-Za-z0-9]+)', message, re.IGNORECASE)
+        if order_id_match:
+            order_id = order_id_match.group(0).upper()
+            # Try to extract delivery location
+            location_match = re.search(r'to\s+(.+?)(?:\.|\?|$)', message)
+            if location_match:
+                delivery_location = location_match.group(1).strip()
+                print(f"Directly calling RobotDeliveryTool with order_id: {order_id}, location: {delivery_location}")
+                try:
+                    delivery_result = send_robot_delivery_request(
+                        order_id=order_id,
+                        delivery_location=delivery_location
+                    )
+                    await cl.Message(content=f"🤖 Robot delivery has been dispatched for order {order_id} to {delivery_location}. The robot is on its way!").send()
+                    track_message(f"Robot delivery dispatched for order {order_id}.", is_user=False)
+                    return
+                except Exception as tool_err:
+                    print(f"Direct tool call error: {tool_err}")
+                    # Fall through to normal agent flow
+    
     try:
-        # Build chat history from memory
-        memory = agent.memory
-        chat_history = "\n".join(
-            [f"{msg.type}: {msg.content}" 
-             for msg in memory.buffer
-             if isinstance(msg, (HumanMessage, AIMessage))]
-        )
-        
-        prompt = (
-            f"Conversation history:\n{chat_history}\n\n"
-            f"Current page: {context.get('current_page', 'home')}\n"
-            f"User: {message}\n"
-            f"Assistant:"
-        )
-        
-        print(f"Processing message with prompt:\n{prompt}")
-        
-        # Add a timeout for agent.run to prevent hanging
+        # Use the agent to process the message
         from concurrent.futures import TimeoutError
         import asyncio
         
         try:
-            # Try to get a response with a timeout
+            # Try to get a response with a timeout - Use the original approach from the first code
+            print(f"Processing message with agent.run, input: {message}")
             response = await asyncio.wait_for(
-                cl.make_async(agent.run)(prompt),
+                cl.make_async(agent.run)(message),
                 timeout=30  # 30 second timeout
             )
             
@@ -2778,7 +3279,7 @@ async def process_message(message, message_id=None, source=None):
             
         # Log updated conversation memory
         print("Updated conversation memory:")
-        for msg in memory.buffer:
+        for msg in agent.memory.buffer:
             print(f"{msg.type}: {msg.content}")
             
     except Exception as e:
@@ -2786,11 +3287,94 @@ async def process_message(message, message_id=None, source=None):
         import traceback
         traceback.print_exc()
         
+        # Fallback for direct order handling when everything else fails
+        if "order" in message.lower():
+            try:
+                # Create a simple order with default items
+                order_items = []
+                if "latte" in message.lower():
+                    order_items.append({"item_id": 2, "quantity": 1})
+                if "croissant" in message.lower():
+                    order_items.append({"item_id": 7, "quantity": 1})
+                if not order_items and any(item in message.lower() for item in ["coffee", "drink"]):
+                    order_items.append({"item_id": 2, "quantity": 1})  # Default to latte
+                
+                if order_items:
+                    # Process order
+                    response = OrderManager.place_order({"items": order_items})
+                    response_msg = OrderManager.handle_order_response(response)
+                    cl.user_session.set("order_in_progress", response)
+                    track_message(response_msg, is_user=False)
+                    await cl.Message(content=response_msg).send()
+                    return
+            except Exception as fallback_err:
+                print(f"Fallback order handling failed: {fallback_err}")
+        
+        # Basic greetings should always work, even when everything else fails
+        if any(greeting in message.lower() for greeting in ["hello", "hi", "hey", "greetings"]):
+            greeting_msg = "Hello! Welcome to Neo Cafe. How can I help you today?"
+            track_message(greeting_msg, is_user=False)
+            await cl.Message(content=greeting_msg).send()
+            return
+            
+        # Generic error fallback
         track_message("I'm having trouble processing your request. Could you try rephrasing?", is_user=False)
-        await cl.Message(
-            content="I'm having trouble processing your request. Could you try rephrasing?"
-        ).send()
+        await cl.Message(content="I'm having trouble processing your request. Could you try rephrasing?").send()
 
+@cl.on_window_message
+async def handle_window_message(message):
+    """
+    Handle messages from the parent window (Dash app).
+    Args:
+        message: Message content (string or dict).
+    """
+    print(f"Received window message: {message}")
+    actual_message = None
+    message_id = f"window_{time.time()}"
+    
+    if isinstance(message, dict):
+        if 'message' in message:
+            actual_message = message['message']
+            if 'id' in message:
+                message_id = f"window_{message['id']}"
+        elif 'kind' in message and message.get('kind') == 'user_message':
+            if 'data' in message and 'content' in message['data']:
+                actual_message = message['data']['content']
+    elif isinstance(message, str):
+        actual_message = message
+        
+    if actual_message:
+        print(f"Extracted message from window: {actual_message}")
+        await process_message(actual_message, message_id=message_id, source="window")
+    else:
+        print(f"Could not extract message from: {message}")
+
+def order_status_wrapper(input_data):
+    """Wrapper for order status to handle different input formats"""
+    print(f"Order status tool called with input: {input_data}")
+    try:
+        # Handle different input formats
+        if isinstance(input_data, dict):
+            # Extract order_id if it's a dict - handle both quoted and unquoted keys
+            if 'order_id' in input_data:
+                order_id = input_data['order_id']
+            elif '"order_id"' in input_data:  # Handle quoted key
+                order_id = input_data['"order_id"']
+            else:
+                # Try to convert the whole dict to string as fallback
+                order_id = str(input_data)
+        else:
+            # Handle string input - remove quotes if present
+            order_id = input_data
+            if isinstance(order_id, str) and order_id.startswith('"') and order_id.endswith('"'):
+                order_id = order_id.strip('"')
+        
+        # Call the actual function
+        return OrderManager.get_order_status(order_id)
+    except Exception as e:
+        print(f"Error in order_status_wrapper: {e}")
+        return f"Error checking order status: {str(e)}"
+    
 @cl.on_chat_end
 def on_chat_end():
     """Save conversation history when chat ends with better error handling"""
@@ -3115,6 +3699,187 @@ def get_user_session(user_id):
         logger.error(f"Error getting user session: {e}")
         return None
 
+def safe_agent_run(message_input):
+    """
+    Safely process a message through the agent with proper error handling
+    
+    Args:
+        message_input (str): User's input message
+        
+    Returns:
+        str: Agent's response
+    """
+    try:
+        # Check for simple greetings first - bypass agent completely
+        if len(message_input.split()) <= 3 and any(word in message_input.lower() for word in 
+                                                ["hi", "hello", "hey", "greetings", "morning", "afternoon"]):
+            return "Hello! Welcome to Neo Cafe. How can I help you today?"
+            
+        # Get the agent
+        agent = cl.user_session.get("agent")
+        if not agent:
+            return "I'm having trouble connecting to my system. Please try again in a moment."
+            
+        # CRITICAL FIX: The correct way to call the agent
+        # Don't use agent.run() - use the __call__ method with a dictionary input
+        result = agent({"input": message_input})
+        
+        # Extract the output from the result
+        if isinstance(result, dict) and "output" in result:
+            return result["output"]
+        else:
+            # Fallback in case result format is unexpected
+            return str(result)
+            
+    except ValueError as ve:
+        error_msg = str(ve)
+        print(f"ValueError in safe_agent_run: {error_msg}")
+        
+        # Handle specific missing input keys errors
+        if "Missing some input keys" in error_msg:
+            # Check for specific missing keys
+            if '"order_id"' in error_msg or "'order_id'" in error_msg:
+                # Try to extract order ID from message
+                import re
+                order_id_match = re.search(r'(ORD-[A-Za-z0-9]+)', message_input, re.IGNORECASE)
+                if order_id_match:
+                    order_id = order_id_match.group(0).upper()
+                    # Direct call to OrderManager
+                    return f"I found order ID {order_id} in your message. Let me check its status for you.\n\n{OrderManager.get_order_status(order_id)}"
+                else:
+                    # Special handling for ordering intent
+                    if "order" in message_input.lower() and any(item in message_input.lower() for item in ["latte", "coffee", "croissant", "pastry", "espresso"]):
+                        # This is an order request, not an order status request
+                        try:
+                            # Parse order from text
+                            order_items = []
+                            if "latte" in message_input.lower():
+                                latte_item = next((mi for mi in menu_items if mi["name"].lower() == "latte"), None)
+                                if latte_item:
+                                    order_items.append({
+                                        "item_id": latte_item["id"],
+                                        "quantity": 1,
+                                        "special_instructions": ""
+                                    })
+                            if "croissant" in message_input.lower():
+                                croissant_item = next((mi for mi in menu_items if mi["name"].lower() == "croissant"), None)
+                                if croissant_item:
+                                    order_items.append({
+                                        "item_id": croissant_item["id"],
+                                        "quantity": 1,
+                                        "special_instructions": ""
+                                    })
+                            
+                            # Create order
+                            order_data = {
+                                "items": order_items,
+                                "delivery_type": "robot-delivery" if "robot" in message_input.lower() else ""
+                            }
+                            
+                            # Place order through OrderManager
+                            response = OrderManager.place_order(order_data)
+                            return OrderManager.handle_order_response(response)
+                        except Exception as order_err:
+                            print(f"Error in order processing: {order_err}")
+                            return "I'd be happy to help you place an order. Could you tell me what items you'd like to order, and whether it's for dine-in, pickup, or delivery?"
+                    else:
+                        return "I need an order ID to check the status. Can you please provide an order ID (like ORD-123ABC)?"
+            
+            # Handle delivery_location specifically
+            elif '"delivery_location"' in error_msg or "'delivery_location'" in error_msg:
+                return "I need a delivery location to process that request. Where should the delivery be sent to?"
+            
+            # Generic fallback
+            else:
+                return "I'm missing some required information to process your request. Could you provide more details?"
+        else:
+            return f"I encountered an error processing your request: {error_msg}. Please try rephrasing."
+    
+    except KeyError as ke:
+        error_key = str(ke)
+        print(f"KeyError in agent call: {error_key}")
+        
+        # Special handling for direct ordering intent
+        if "order" in message_input.lower() and any(item in message_input.lower() for item in ["latte", "coffee", "croissant", "pastry", "espresso"]):
+            # Process like a direct order
+            try:
+                # Parse order from text
+                order_items = []
+                if "latte" in message_input.lower():
+                    latte_item = next((mi for mi in menu_items if mi["name"].lower() == "latte"), None)
+                    if latte_item:
+                        order_items.append({
+                            "item_id": latte_item["id"],
+                            "quantity": 1,
+                            "special_instructions": ""
+                        })
+                if "croissant" in message_input.lower():
+                    croissant_item = next((mi for mi in menu_items if mi["name"].lower() == "croissant"), None)
+                    if croissant_item:
+                        order_items.append({
+                            "item_id": croissant_item["id"],
+                            "quantity": 1,
+                            "special_instructions": ""
+                        })
+                
+                # Create order
+                order_data = {
+                    "items": order_items,
+                    "delivery_type": "robot-delivery" if "robot" in message_input.lower() else ""
+                }
+                
+                # Process order
+                response = OrderManager.place_order(order_data)
+                return OrderManager.handle_order_response(response)
+            except Exception as e:
+                print(f"Error in direct order processing: {e}")
+                return "I'd be happy to help you order! What would you like to order today?"
+        
+        # Handle common key errors
+        if '"order_id"' in error_key or "'order_id'" in error_key:
+            # Extract order ID if possible
+            import re
+            order_id_match = re.search(r'(ORD-[A-Za-z0-9]+)', message_input, re.IGNORECASE)
+            if order_id_match:
+                order_id = order_id_match.group(0).upper()
+                return f"I found order ID {order_id} in your message. Let me check its status for you.\n\n{OrderManager.get_order_status(order_id)}"
+            else:
+                return "I need an order ID to check the status. Can you please provide an order ID (like ORD-123ABC)?"
+        
+        # Handle other specific keys
+        elif '"delivery_location"' in error_key or "'delivery_location'" in error_key:
+            return "I need a delivery location to process that request. Where should the delivery be sent to?"
+        
+        else:
+            return "I'm having trouble understanding your request. Could you please provide more details?"
+    
+    except Exception as e:
+        print(f"Error in safe_agent_run: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        # Basic conversation handling for common greetings
+        if any(greeting in message_input.lower() for greeting in ["hello", "hi", "hey", "greetings"]):
+            return "Hello! Welcome to Neo Cafe. How can I help you today?"
+        
+        # Special case for direct order handling when agent fails
+        if "order" in message_input.lower() and any(item in message_input.lower() for item in ["latte", "coffee", "croissant", "pastry", "espresso"]):
+            try:
+                order_items = []
+                if "latte" in message_input.lower():
+                    order_items.append({"item_id": 2, "quantity": 1})  # Assuming ID 2 is latte
+                if "croissant" in message_input.lower():
+                    order_items.append({"item_id": 7, "quantity": 1})  # Assuming ID 7 is croissant
+                
+                # Create simple order with minimal info to start conversation flow
+                order_data = {"items": order_items}
+                response = OrderManager.place_order(order_data)
+                return OrderManager.handle_order_response(response)
+            except Exception as order_err:
+                print(f"Fallback order processing failed: {order_err}")
+        
+        return "I'm sorry, I'm having trouble processing your request right now. Could you try again with different wording?"
+    
 def update_user_session_field(user_id, field, value):
     """
     Update a specific field in the user session
@@ -3559,6 +4324,365 @@ def update_chat_ui_with_order(order_data):
     except Exception as e:
         print(f"Error in update_chat_ui_with_order: {e}")
 
+def handle_robot_delivery_request(order_info_str):
+    """
+    Process a robot delivery request from the chatbot conversation
+    
+    Args:
+        order_info_str (str): Order info with order_id and delivery_location
+        
+    Returns:
+        str: Result of the delivery request
+    """
+    print("\n" + "="*50)
+    print("HANDLE ROBOT DELIVERY REQUEST FUNCTION CALLED")
+    print(f"INPUT: {order_info_str}")
+    print("="*50)
+    
+    try:
+        order_id = None
+        delivery_location = None
+        
+        # NEW: Handle the case where order_info might be a dict with quoted keys
+        if isinstance(order_info_str, dict):
+            # Check for normal keys
+            if 'order_id' in order_info_str:
+                order_id = order_info_str['order_id']
+                delivery_location = order_info_str.get('delivery_location')
+            # Check for quoted keys (this is the issue we're fixing)
+            elif '"order_id"' in order_info_str:
+                order_id = order_info_str['"order_id"']
+                delivery_location = order_info_str.get('"delivery_location"', order_info_str.get('delivery_location'))
+            # If delivery_location isn't found with either key format, try both alternatives
+            if not delivery_location:
+                if 'delivery_location' in order_info_str:
+                    delivery_location = order_info_str['delivery_location']
+                elif '"delivery_location"' in order_info_str:
+                    delivery_location = order_info_str['"delivery_location"']
+                
+            print(f"Extracted from dictionary: order_id={order_id}, location={delivery_location}")
+        
+        # Handle string input - try to parse as JSON
+        elif isinstance(order_info_str, str):
+            # Remove surrounding quotes if present
+            if order_info_str.startswith('"') and order_info_str.endswith('"'):
+                order_info_str = order_info_str.strip('"')
+                print(f"Removed surrounding quotes: {order_info_str}")
+                
+            # Try to parse as JSON
+            try:
+                print("Attempting to parse input as JSON")
+                order_info = json.loads(order_info_str)
+                order_id = order_info.get("order_id")
+                delivery_location = order_info.get("delivery_location")
+                print(f"Successfully parsed as JSON: {order_info}")
+            except json.JSONDecodeError:
+                print("Input is not valid JSON, trying to extract order information from text")
+                # Handle the case where input might be just an order ID
+                if order_info_str.strip().upper().startswith("ORD-") or order_info_str.strip().isalnum():
+                    order_id = order_info_str.strip()
+                    # Try to get delivery location from context
+                    context = cl.user_session.get("context", {})
+                    if "active_order" in context and context["active_order"].get("id") == order_id:
+                        delivery_location = context.get("delivery_location", "Default Location")
+                        print(f"Using delivery location from context: {delivery_location}")
+                    else:
+                        # Use default location if not found
+                        delivery_location = "Default Location"
+                    print(f"Using order_id directly: {order_id}, location: {delivery_location}")
+                else:
+                    # Try to extract order ID and location from text
+                    import re
+                    order_id_match = re.search(r'(ORD-[A-Za-z0-9]+|\border\s+[A-Za-z0-9-]+)', order_info_str, re.IGNORECASE)
+                    location_match = re.search(r'to\s+(.+?)(?:\.|\?|$)', order_info_str)
+                    
+                    if order_id_match:
+                        order_id = order_id_match.group(0).replace('order ', '').strip()
+                        if not order_id.upper().startswith("ORD-"):
+                            order_id = f"ORD-{order_id}"
+                        print(f"Extracted order ID from text: {order_id}")
+                    
+                    if location_match:
+                        delivery_location = location_match.group(1).strip()
+                        print(f"Extracted delivery location from text: {delivery_location}")
+                    
+                    if not delivery_location:
+                        delivery_location = "Default Location"
+                        print(f"Using default delivery location: {delivery_location}")
+        
+        # Validate required fields
+        if not order_id:
+            print("Error: Missing order ID")
+            return "Error: Order ID is required for robot delivery."
+        
+        # Format order ID if needed
+        if not order_id.upper().startswith("ORD-"):
+            order_id = f"ORD-{order_id}".upper()
+            print(f"Reformatted order ID to: {order_id}")
+        else:
+            order_id = order_id.upper()
+        
+        # Call the robot delivery API
+        print(f"Calling robot delivery API for order {order_id} to {delivery_location}")
+        result = send_robot_delivery_request(order_id, delivery_location)
+        print(f"Robot API call result: {result}")
+        
+        if result.get("status") == "success":
+            print("Robot delivery API call was successful, updating database and UI")
+            # Update order status in database
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute('''UPDATE order_history 
+                            SET status = ? 
+                            WHERE order_id = ?''',
+                        ('out for delivery', order_id))
+                conn.commit()
+                conn.close()
+                print(f"Updated order {order_id} status to 'out for delivery' in database")
+            except Exception as db_err:
+                print(f"Database error while updating order status: {db_err}")
+            
+            # Update UI
+            try:
+                # Send to parent window
+                print("Sending robot delivery started event to parent window")
+                cl.send_to_parent({
+                    "type": "robot_delivery_started",
+                    "order_id": order_id,
+                    "delivery_location": delivery_location,
+                    "status": "in_progress"
+                })
+                
+                # If we have an active order in context, update it
+                context = cl.user_session.get("context", {})
+                if "active_order" in context and context["active_order"].get("id") == order_id:
+                    context["active_order"]["delivery_status"] = "in_progress"
+                    context["active_order"]["robot_delivery"] = True
+                    cl.user_session.set("context", context)
+                    print("Updated active order in context with robot delivery status")
+                
+                print("Successfully updated UI with robot delivery status")
+            except Exception as ui_err:
+                print(f"Error updating UI with robot status: {ui_err}")
+            
+            print("Returning success message to user")
+            print("="*50 + "\n")
+            return f"🤖 Robot delivery has been dispatched for order {order_id} to {delivery_location}. The robot is on its way!"
+        else:
+            error_msg = result.get("message", "Unknown error")
+            print(f"Robot delivery API call failed: {error_msg}")
+            print("="*50 + "\n")
+            return f"Sorry, there was a problem starting the robot delivery: {error_msg}. Our staff will handle the delivery manually."
+    
+    except Exception as e:
+        import traceback
+        print(f"Unexpected error in handle_robot_delivery_request: {e}")
+        print("TRACEBACK:")
+        print(traceback.format_exc())
+        print("="*50 + "\n")
+        return f"An error occurred while processing the robot delivery request: {str(e)}. Our staff will handle your delivery manually."
+    
+def request_robot_delivery(order_info_str):
+    """
+    Request robot delivery for an order with enhanced input handling and logging
+    
+    Args:
+        order_info_str (str): Either a JSON string, a plain order ID, or a text description
+            
+    Returns:
+        str: Result message
+    """
+    print("\n" + "+"*80)
+    print("ROBOT DELIVERY REQUEST FUNCTION CALLED")
+    print(f"TIMESTAMP: {datetime.now().isoformat()}")
+    print(f"INPUT: {order_info_str}")
+    print("+"*80)
+    
+    try:
+        # Handle different input formats
+        order_id = None
+        delivery_location = None
+        
+        if isinstance(order_info_str, dict):
+            # Already a dictionary, extract directly
+            order_id = order_info_str.get("order_id")
+            delivery_location = order_info_str.get("delivery_location")
+            print(f"Input is a dictionary: order_id={order_id}, location={delivery_location}")
+            
+        elif isinstance(order_info_str, str):
+            # Check if it might be just an order ID with quotes
+            if order_info_str.strip().startswith('"') and order_info_str.strip().endswith('"'):
+                # Remove quotes
+                order_id = order_info_str.strip().strip('"')
+                print(f"Stripped quotes from order_id: {order_id}")
+                
+                # Try to get delivery location from active order in context
+                context = cl.user_session.get("context", {})
+                if "active_order" in context and context["active_order"].get("id") == order_id:
+                    delivery_location = context.get("delivery_location", "")
+                    print(f"Using delivery location from context: {delivery_location}")
+                    
+                if not delivery_location:
+                    # Try to get from database
+                    try:
+                        conn = sqlite3.connect(DB_PATH)
+                        c = conn.cursor()
+                        c.execute('SELECT delivery_location FROM order_history WHERE order_id = ?', (order_id,))
+                        result = c.fetchone()
+                        conn.close()
+                        
+                        if result and result[0]:
+                            delivery_location = result[0]
+                            print(f"Found delivery location in database: {delivery_location}")
+                    except Exception as db_err:
+                        print(f"Error retrieving from database: {db_err}")
+                        
+                if not delivery_location:
+                    # If still no location, use default
+                    delivery_location = "Default Location"
+                    print(f"Using default delivery location: {delivery_location}")
+                    
+            # Check if it's just an order ID without quotes
+            elif order_info_str.strip().upper().startswith("ORD-") or order_info_str.strip().isalnum():
+                order_id = order_info_str.strip()
+                print(f"Input appears to be just an order ID: {order_id}")
+                
+                # Try to get delivery location from context or database as above
+                context = cl.user_session.get("context", {})
+                if "active_order" in context and context["active_order"].get("id") == order_id:
+                    delivery_location = context.get("delivery_location", "")
+                    print(f"Using delivery location from context: {delivery_location}")
+                    
+                if not delivery_location:
+                    try:
+                        conn = sqlite3.connect(DB_PATH)
+                        c = conn.cursor()
+                        c.execute('SELECT delivery_location FROM order_history WHERE order_id = ?', (order_id,))
+                        result = c.fetchone()
+                        conn.close()
+                        
+                        if result and result[0]:
+                            delivery_location = result[0]
+                            print(f"Found delivery location in database: {delivery_location}")
+                    except Exception as db_err:
+                        print(f"Error retrieving from database: {db_err}")
+                
+                if not delivery_location:
+                    # If still no location, use default
+                    delivery_location = "Default Location"
+                    print(f"Using default delivery location: {delivery_location}")
+                
+            else:
+                # Try parsing as JSON
+                try:
+                    print("Attempting to parse input as JSON")
+                    order_info = json.loads(order_info_str)
+                    order_id = order_info.get("order_id")
+                    delivery_location = order_info.get("delivery_location")
+                    print(f"Successfully parsed as JSON: order_id={order_id}, location={delivery_location}")
+                except json.JSONDecodeError:
+                    print("Input is not valid JSON, trying to extract order information from text")
+                    # Handle plain text input
+                    if "order" in order_info_str.lower() and any(s in order_info_str.lower() for s in ["deliver", "send", "bring"]):
+                        # Try to extract order ID and address
+                        import re
+                        order_id_match = re.search(r'(ORD-[A-Za-z0-9]+|\border\s+[A-Za-z0-9-]+)', order_info_str, re.IGNORECASE)
+                        location_match = re.search(r'to\s+(.+?)(?:\.|\?|$)', order_info_str)
+                        
+                        if order_id_match and location_match:
+                            order_id = order_id_match.group(0).replace('order ', '').strip()
+                            delivery_location = location_match.group(1).strip()
+                            
+                            # Ensure order ID is properly formatted
+                            if not order_id.upper().startswith("ORD-"):
+                                order_id = f"ORD-{order_id}"
+                                print(f"Reformatted order ID to: {order_id}")
+                                
+                            print(f"Extracted from text: order_id={order_id}, location={delivery_location}")
+                        else:
+                            print("Could not extract both order ID and location from text")
+                            return "I need both an order ID (like ORD-123ABC) and a delivery location to send the robot. Please provide this information."
+                    else:
+                        print("Text does not appear to be a delivery request")
+                        return "Please provide order information with both an order ID and a delivery location."
+        
+        # Validate required fields
+        if not order_id:
+            print("Error: Missing order ID")
+            return "Error: Order ID is required for robot delivery"
+        
+        if not delivery_location:
+            print("Error: Missing delivery location")
+            return "Error: Delivery location is required for robot delivery"
+            
+        # Format order ID if needed
+        if not order_id.upper().startswith("ORD-"):
+            order_id = f"ORD-{order_id}".upper()
+            print(f"Reformatted order ID to: {order_id}")
+        else:
+            order_id = order_id.upper()
+            
+        # Call our consolidated robot delivery function
+        print(f"Calling robot delivery API for order {order_id} to {delivery_location}")
+        result = send_robot_delivery_request(order_id, delivery_location)
+        print(f"Robot API call result: {result}")
+        
+        if result.get("status") == "success":
+            print("Robot delivery API call was successful, updating database and UI")
+            # Update order status in database
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute('''UPDATE order_history 
+                            SET status = ? 
+                            WHERE order_id = ?''',
+                        ('out for delivery', order_id))
+                conn.commit()
+                conn.close()
+                print(f"Updated order {order_id} status to 'out for delivery' in database")
+            except Exception as db_err:
+                print(f"Database error while updating order status: {db_err}")
+                
+            # Update UI with robot delivery status
+            try:
+                # Send to parent window
+                print("Sending robot delivery started event to parent window")
+                cl.send_to_parent({
+                    "type": "robot_delivery_started",
+                    "order_id": order_id,
+                    "delivery_location": delivery_location,
+                    "status": "in_progress"
+                })
+                
+                # Update session context if this is the active order
+                context = cl.user_session.get("context", {})
+                if "active_order" in context and context["active_order"].get("id") == order_id:
+                    context["active_order"]["delivery_status"] = "in_progress"
+                    context["active_order"]["robot_delivery"] = True
+                    cl.user_session.set("context", context)
+                    print("Updated active order in context with robot delivery status")
+                    
+                print("Successfully updated UI with robot delivery status")
+            except Exception as ui_err:
+                print(f"Error updating UI with robot delivery status: {ui_err}")
+            
+            print("Returning success message to user")
+            print("+"*80 + "\n")
+            return f"🤖 Robot delivery has been dispatched for order {order_id} to {delivery_location}. The robot is on its way!"
+        else:
+            error_message = result.get("message", "Unknown error")
+            print(f"Robot delivery API call failed: {error_message}")
+            print("+"*80 + "\n")
+            return f"Sorry, there was a problem starting the robot delivery: {error_message}. Our staff will handle the delivery manually."
+    except Exception as e:
+        import traceback
+        print(f"Unexpected error in request_robot_delivery: {e}")
+        print("TRACEBACK:")
+        print(traceback.format_exc())
+        print("+"*80 + "\n")
+        return f"Error requesting robot delivery: {str(e)}. Our staff will handle your delivery manually."
+    
 @cl.set_starters
 async def set_starters():
     return [
@@ -3582,4 +4706,5 @@ async def set_starters():
             message="When do you open today?",
             description="Check store schedule"
         )
+
     ]

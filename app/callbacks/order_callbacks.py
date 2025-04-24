@@ -398,21 +398,37 @@ def register_callbacks(app, socketio):
         return items_list, total_message
     
     # 4. Place Order button in form callback
+    # Enhanced place_order_callback function in app/callbacks/order_callbacks.py
+
     @app.callback(
         [Output("order-alert", "children"),
-         Output("cart-store", "data", allow_duplicate=True)],
+        Output("cart-store", "data", allow_duplicate=True),
+        Output("delivery-update-store", "data")],  # Added to store delivery info
         [Input("submit-order-button", "n_clicks")],
-        [State("order-location", "value"),
-         State("order-payment", "value"),
-         State("order-instructions", "value"),
-         State("cart-store", "data"),
-         State("user-store", "data")],
+        [State("order-delivery-type", "value"),
+        State("order-location", "value"),
+        State("order-address", "value"),  # Added address field
+        State("order-payment", "value"),
+        State("order-instructions", "value"),
+        State("cart-store", "data"),
+        State("user-store", "data")],
         prevent_initial_call=True
     )
-    def place_order_callback(n_clicks, location, payment_method, instructions, cart_items, user_data):
-        """Place an order when the Place Order button is clicked"""
+    def place_order_callback(n_clicks, delivery_type, location, address, payment_method,
+                            instructions, cart_items, user_data):
+        """Place an order when the Place Order button is clicked with robot delivery support"""
         if not n_clicks or not cart_items:
-            return no_update, no_update
+            return dash.no_update, dash.no_update, dash.no_update
+        
+        # Validate delivery information
+        if delivery_type in ["standard-delivery", "robot-delivery"] and not address:
+            return dbc.Alert("Please enter a delivery address", color="danger"), dash.no_update, dash.no_update
+        
+        # Process delivery location based on type
+        if delivery_type in ["standard-delivery", "robot-delivery"]:
+            delivery_location = address  # Use the address input
+        else:
+            delivery_location = location  # Use the selected location
         
         # Create order data
         order_id = f"ORD-{int(time.time())}"
@@ -423,7 +439,8 @@ def register_callbacks(app, socketio):
             "items": cart_items,
             "total": total,
             "special_instructions": instructions,
-            "delivery_location": location,
+            "delivery_type": delivery_type,
+            "delivery_location": delivery_location,
             "payment_method": payment_method,
             "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "status": "New"
@@ -432,23 +449,98 @@ def register_callbacks(app, socketio):
         if user_data and "username" in user_data:
             order_data["username"] = user_data["username"]
         
+        # Robot delivery specific data
+        if delivery_type == "robot-delivery":
+            order_data["robot_delivery"] = True
+        
         try:
             # In a real app, this would call the place_order function
-            # For demo, we'll simulate success
+            # For demo, we'll use socketio to broadcast the order
             
             # Emit socket event for order update
             socketio.emit('new_order', order_data)
             
-            # Create success alert
-            alert = dbc.Alert(
-                f"Order placed successfully! Order ID: {order_id}",
-                color="success",
-                dismissable=True
-            )
+            # If this is a robot delivery, start the robot delivery process
+            delivery_result = None
+            if delivery_type == "robot-delivery":
+                try:
+                    # Import the robot API utilities
+                    from app.utils.robot_api_utils import start_robot_delivery
+                    
+                    # Start the robot delivery
+                    delivery_result = start_robot_delivery(
+                        interface_name="en7",
+                        order_id=order_id,
+                        delivery_location=delivery_location
+                    )
+                    
+                    if delivery_result.get('status') == 'success':
+                        order_data["delivery_status"] = "in_progress"
+                        
+                        # Emit a specific robot update event
+                        socketio.emit('robot_delivery_started', {
+                            'order_id': order_id,
+                            'delivery_location': delivery_location,
+                            'status': 'in_progress'
+                        })
+                        
+                        # Create a success alert with robot info
+                        alert = dbc.Alert([
+                            html.H4([html.I(className="fas fa-check-circle me-2"), "Order Placed Successfully!"]),
+                            html.P(f"Order ID: {order_id}"),
+                            html.P([
+                                html.I(className="fas fa-robot me-2"), 
+                                "A robot has been dispatched to deliver your order. ",
+                                html.A("Track your delivery", href="/delivery", className="alert-link")
+                            ])
+                        ], color="success", dismissable=True)
+                    else:
+                        # Robot delivery request failed
+                        print(f"Robot delivery failed: {delivery_result.get('error')}")
+                        
+                        # Create a partial success alert
+                        alert = dbc.Alert([
+                            html.H4([html.I(className="fas fa-check-circle me-2"), "Order Placed"]),
+                            html.P(f"Order ID: {order_id}"),
+                            html.P([
+                                html.I(className="fas fa-exclamation-triangle me-2"),
+                                "However, there was an issue with the robot delivery service. Our staff will handle your delivery manually."
+                            ])
+                        ], color="warning", dismissable=True)
+                except Exception as e:
+                    print(f"Error starting robot delivery: {e}")
+                    
+                    # Create a partial success alert
+                    alert = dbc.Alert([
+                        html.H4([html.I(className="fas fa-check-circle me-2"), "Order Placed"]),
+                        html.P(f"Order ID: {order_id}"),
+                        html.P([
+                            html.I(className="fas fa-exclamation-triangle me-2"),
+                            f"However, there was an error with the robot delivery: {str(e)}. Our staff will handle your delivery manually."
+                        ])
+                    ], color="warning", dismissable=True)
+            else:
+                # Regular order confirmation
+                alert = dbc.Alert(
+                    f"Order placed successfully! Order ID: {order_id}",
+                    color="success",
+                    dismissable=True
+                )
             
-            # Return success alert and empty cart
-            return alert, []
+            # Update the delivery-update-store with delivery info if applicable
+            delivery_update = None
+            if delivery_type == "robot-delivery" and delivery_result and delivery_result.get('status') == 'success':
+                delivery_update = {
+                    "order_id": order_id,
+                    "delivery_location": delivery_location,
+                    "robot_delivery": True,
+                    "delivery_status": "in_progress",
+                    "delivery_data": delivery_result.get('data', {})
+                }
             
+            # Return success alert, empty cart, and delivery update
+            return alert, [], delivery_update if delivery_update else dash.no_update
+                
         except Exception as e:
             # Create error alert
             alert = dbc.Alert(
@@ -458,7 +550,7 @@ def register_callbacks(app, socketio):
             )
             
             # Return error alert and keep cart
-            return alert, cart_items
+            return alert, cart_items, dash.no_update
     
     # 5. Handle final confirm order from modal
     @app.callback(
@@ -969,6 +1061,59 @@ def register_callbacks(app, socketio):
         
         # For demo, just return the new status
         return {"id": order_id, "status": new_status}
+    
+
+    # Add this callback to app/callbacks/order_callbacks.py
+
+    @app.callback(
+        [
+            Output("delivery-address-container", "style"),
+            Output("robot-delivery-info-container", "style"),
+            Output("order-location", "options")
+        ],
+        [Input("order-delivery-type", "value")]
+    )
+    def update_delivery_fields(delivery_type):
+        """Update form fields based on delivery type selection"""
+        # Default display states
+        address_style = {"display": "none"}
+        robot_info_style = {"display": "none"}
+        
+        # Default location options for dine-in
+        location_options = [
+            {"label": "Table 1", "value": "Table 1"},
+            {"label": "Table 2", "value": "Table 2"},
+            {"label": "Table 3", "value": "Table 3"},
+            {"label": "Table 4", "value": "Table 4"},
+            {"label": "Table 5", "value": "Table 5"},
+            {"label": "Counter", "value": "Counter"},
+            {"label": "Outdoor Patio", "value": "Outdoor Patio"}
+        ]
+        
+        # Adjust based on delivery type
+        if delivery_type == "dine-in":
+            # Dine-in shows table options, no address field
+            pass
+        elif delivery_type == "pickup":
+            # Pickup shows just the counter option
+            location_options = [
+                {"label": "Pickup Counter", "value": "Pickup Counter"}
+            ]
+        elif delivery_type == "standard-delivery":
+            # Standard delivery shows address field
+            address_style = {"display": "block"}
+            location_options = [
+                {"label": "Enter Address", "value": "Delivery Address"}
+            ]
+        elif delivery_type == "robot-delivery":
+            # Robot delivery shows address field and robot info
+            address_style = {"display": "block"}
+            robot_info_style = {"display": "block"}
+            location_options = [
+                {"label": "Enter Address", "value": "Delivery Address"}
+            ]
+        
+        return address_style, robot_info_style, location_options
     
 
 

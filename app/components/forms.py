@@ -124,14 +124,33 @@ def signup_form():
     
     return form
 
+# Updated order_form function in app/components/forms.py
+
 def order_form():
     """
-    Create an order form
+    Create an enhanced order form with robot delivery option
     
     Returns:
         dbc.Form: Order form component
     """
     form = dbc.Form([
+        dbc.Row([
+            dbc.Col([
+                dbc.Label("Delivery Type", html_for="order-delivery-type"),
+                dbc.RadioItems(
+                    id="order-delivery-type",
+                    options=[
+                        {"label": "Dine In", "value": "dine-in"},
+                        {"label": "Pickup", "value": "pickup"},
+                        {"label": "Standard Delivery", "value": "standard-delivery"},
+                        {"label": "Robot Delivery", "value": "robot-delivery"},
+                    ],
+                    value="dine-in",
+                    inline=True,
+                    className="mb-3"
+                )
+            ], md=12)
+        ]),
         dbc.Row([
             dbc.Col([
                 dbc.Label("Delivery Location", html_for="order-location"),
@@ -145,7 +164,7 @@ def order_form():
                         {"label": "Table 5", "value": "Table 5"},
                         {"label": "Counter", "value": "Counter"},
                         {"label": "Outdoor Patio", "value": "Outdoor Patio"},
-                        {"label": "Delivery", "value": "Delivery"}
+                        {"label": "Delivery Address", "value": "Enter Address"}
                     ],
                     value="Table 1",
                     className="mb-3"
@@ -165,6 +184,37 @@ def order_form():
                 )
             ], md=6)
         ]),
+        
+        # Address input - conditionally shown when delivery is selected
+        dbc.Row([
+            dbc.Col([
+                dbc.Label("Delivery Address", html_for="order-address"),
+                dbc.Textarea(
+                    id="order-address",
+                    placeholder="Enter your delivery address",
+                    className="mb-3",
+                    style={"height": "80px"}
+                )
+            ], id="delivery-address-container", style={"display": "none"})
+        ]),
+        
+        # Additional robot delivery info - conditionally shown
+        dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Robot Delivery Information"),
+                    dbc.CardBody([
+                        dbc.Alert([
+                            html.I(className="fas fa-robot me-2"),
+                            "Your order will be delivered by our robot fleet. Please ensure the delivery address is accessible to robots."
+                        ], color="info", className="mb-3"),
+                        html.P("Robot delivery is available within a 2 mile radius of our store."),
+                        html.P("Estimated delivery time: 15-30 minutes after order preparation.")
+                    ])
+                ], className="mb-3")
+            ], id="robot-delivery-info-container", style={"display": "none"})
+        ]),
+        
         dbc.Row([
             dbc.Col([
                 dbc.Label("Special Instructions", html_for="order-instructions"),
