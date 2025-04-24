@@ -28,7 +28,7 @@ except ImportError:
 
 # Constants
 DASHBOARD_URL = os.environ.get('DASHBOARD_URL', 'http://localhost:8050')
-ROBOT_SIMULATOR_URL = os.environ.get('ROBOT_SIMULATOR_URL', 'http://localhost:8051')
+ROBOT_SIMULATOR_URL = os.environ.get('ROBOT_SIMULATOR_URL', 'http://localhost:8001')
 
 
 class VoiceState:

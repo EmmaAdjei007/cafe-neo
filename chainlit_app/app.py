@@ -44,6 +44,35 @@ logger.setLevel(logging.DEBUG)
 # Add parent directory to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+# Add this near the top of your app.py file, right after the imports
+
+# Debug environment variables
+print("\n" + "="*80)
+print("ENVIRONMENT VARIABLE DEBUGGING")
+print(f"TIMESTAMP: {datetime.now().isoformat()}")
+print("="*80)
+
+# Check if the variable exists in environment
+robot_url_env = os.environ.get('ROBOT_SIMULATOR_URL')
+print(f"ROBOT_SIMULATOR_URL from environment: {robot_url_env}")
+
+# Show all environment variables (helpful to check for typos)
+print("\nAll environment variables that contain 'ROBOT':")
+for key, value in os.environ.items():
+    if 'ROBOT' in key:
+        print(f"  {key}: {value}")
+
+# Define the URL with explicit debugging
+print("\nDefining ROBOT_SIMULATOR_URL:")
+if 'ROBOT_SIMULATOR_URL' in os.environ:
+    ROBOT_SIMULATOR_URL = os.environ['ROBOT_SIMULATOR_URL']
+    print(f"  Using environment value: {ROBOT_SIMULATOR_URL}")
+else:
+    ROBOT_SIMULATOR_URL = 'http://localhost:8001'
+    print(f"  Using default value: {ROBOT_SIMULATOR_URL}")
+
+print("="*80 + "\n")
+
 # Constants
 DASHBOARD_URL = os.environ.get('DASHBOARD_URL', 'http://localhost:8050')
 ROBOT_SIMULATOR_URL = os.environ.get('ROBOT_SIMULATOR_URL', 'http://localhost:8001')
@@ -286,6 +315,59 @@ def create_knowledge_base():
         
         return SimpleRetriever()
 
+# Add this function near the top of the file, after the imports
+def log_robot_api_activity(action, order_id=None, delivery_location=None, status=None, message=None, 
+                          call_chain=None, exception=None, response=None):
+    """
+    Log robot API call activities to a file
+    
+    Args:
+        action (str): The type of action being performed (e.g., 'connection_check', 'delivery_request')
+        order_id (str, optional): The order ID if applicable
+        delivery_location (str, optional): The delivery location if applicable
+        status (str, optional): The status of the call (success/error)
+        message (str, optional): A descriptive message
+        call_chain (str, optional): Information about where the call originated
+        exception (Exception, optional): Any exception that occurred
+        response (dict, optional): The API response data
+    """
+    try:
+        # Create logs directory if it doesn't exist
+        os.makedirs('logs', exist_ok=True)
+        
+        # Create a log filename with date
+        log_file = os.path.join('logs', f'robot_api_{datetime.now().strftime("%Y-%m-%d")}.log')
+        
+        # Format the log entry
+        timestamp = datetime.now().isoformat()
+        log_entry = {
+            "timestamp": timestamp,
+            "action": action,
+            "order_id": order_id,
+            "delivery_location": delivery_location,
+            "status": status,
+            "message": message,
+            "call_chain": call_chain,
+            "exception": str(exception) if exception else None,
+            "response": response
+        }
+        
+        # Remove None values for cleaner logs
+        log_entry = {k: v for k, v in log_entry.items() if v is not None}
+        
+        # Write to log file
+        with open(log_file, 'a') as f:
+            f.write(f"{json.dumps(log_entry)}\n")
+            
+        # Also print to console for debugging
+        print(f"ROBOT API LOG: {json.dumps(log_entry)}")
+        
+        return True
+    except Exception as e:
+        # If logging itself fails, print to console
+        print(f"ERROR LOGGING ROBOT API ACTIVITY: {e}")
+        return False
+
 
 def send_robot_delivery_request(order_id, delivery_location):
     """
@@ -298,6 +380,43 @@ def send_robot_delivery_request(order_id, delivery_location):
     Returns:
         dict: Response with status and message
     """
+    # Get call chain information
+    import traceback
+    call_stack = traceback.extract_stack()
+    # Get the caller function (2 levels up)
+    caller = call_stack[-3] if len(call_stack) > 2 else call_stack[-2]
+    call_chain = f"{caller.filename.split('/')[-1]}:{caller.lineno} in {caller.name}"
+    
+    # Debug the URL value more thoroughly
+    print("\nROBOT URL DEBUGGING:")
+    print(f"ROBOT_SIMULATOR_URL constant value: {ROBOT_SIMULATOR_URL}")
+    robot_url_env = os.environ.get('ROBOT_SIMULATOR_URL')
+    print(f"Direct environment check: {robot_url_env}")
+    print(f"Default fallback value: 'http://localhost:8001'")
+    
+    # Check if somehow the URL was changed at runtime
+    if ROBOT_SIMULATOR_URL != 'http://localhost:8001' and ROBOT_SIMULATOR_URL != robot_url_env:
+        print(f"WARNING: URL value doesn't match environment or default!")
+    
+    # Log this value specifically
+    log_robot_api_activity(
+        action="url_debug",
+        order_id=order_id,
+        status="info",
+        message=f"Using ROBOT_SIMULATOR_URL: {ROBOT_SIMULATOR_URL}",
+        call_chain="send_robot_delivery_request"
+    )
+
+    # Start activity log
+    log_robot_api_activity(
+        action="delivery_request_start",
+        order_id=order_id,
+        delivery_location=delivery_location,
+        status="initiated",
+        message="Starting robot delivery request",
+        call_chain=call_chain
+    )
+    
     print("\n" + "="*80)
     print("ROBOT DELIVERY REQUEST STARTED")
     print(f"TIMESTAMP: {datetime.now().isoformat()}")
@@ -339,6 +458,20 @@ def send_robot_delivery_request(order_id, delivery_location):
             
             # Check if the call was successful
             if response.status_code in (200, 201, 202):
+                # Log success
+                log_robot_api_activity(
+                    action="delivery_request_success",
+                    order_id=order_id,
+                    delivery_location=delivery_location,
+                    status="success",
+                    message=f"Robot delivery successfully started for order {order_id}",
+                    call_chain=call_chain,
+                    response={
+                        "status_code": response.status_code,
+                        "body": response.text if hasattr(response, 'text') else "No response body"
+                    }
+                )
+                
                 print("ROBOT DELIVERY REQUEST SUCCESSFUL!")
                 print("="*80 + "\n")
                 return {
@@ -348,6 +481,20 @@ def send_robot_delivery_request(order_id, delivery_location):
                     "timestamp": datetime.now().isoformat()
                 }
             else:
+                # Log error
+                log_robot_api_activity(
+                    action="delivery_request_failed",
+                    order_id=order_id,
+                    delivery_location=delivery_location,
+                    status="error",
+                    message=f"Robot API returned non-success code: {response.status_code}",
+                    call_chain=call_chain,
+                    response={
+                        "status_code": response.status_code,
+                        "body": response.text if hasattr(response, 'text') else "No response body"
+                    }
+                )
+                
                 print(f"ROBOT DELIVERY REQUEST FAILED! Status code: {response.status_code}")
                 print("="*80 + "\n")
                 return {
@@ -357,6 +504,17 @@ def send_robot_delivery_request(order_id, delivery_location):
                     "timestamp": datetime.now().isoformat()
                 }
         except requests.exceptions.ConnectionError as conn_err:
+            # Log connection error
+            log_robot_api_activity(
+                action="delivery_request_connection_error",
+                order_id=order_id,
+                delivery_location=delivery_location,
+                status="error",
+                message="Could not connect to robot API",
+                call_chain=call_chain,
+                exception=conn_err
+            )
+            
             print(f"ROBOT DELIVERY CONNECTION ERROR: Could not connect to robot API at {robot_api_url}")
             print(f"ERROR DETAILS: {str(conn_err)}")
             print("This is likely because you're on a different network or the robot service is down.")
@@ -368,6 +526,16 @@ def send_robot_delivery_request(order_id, delivery_location):
                 print("TRYING FALLBACK DIRECT METHOD...")
                 import urllib.request
                 import json as json_lib
+                
+                # Log fallback attempt
+                log_robot_api_activity(
+                    action="delivery_request_fallback_attempt",
+                    order_id=order_id,
+                    delivery_location=delivery_location,
+                    status="attempt",
+                    message="Trying fallback urllib method after connection error",
+                    call_chain=call_chain
+                )
                 
                 # Prepare request
                 data = json_lib.dumps(payload).encode('utf-8')
@@ -387,6 +555,20 @@ def send_robot_delivery_request(order_id, delivery_location):
                     print(f"FALLBACK RESPONSE BODY: {response_body[:500]}")
                     
                     if status_code in (200, 201, 202):
+                        # Log fallback success
+                        log_robot_api_activity(
+                            action="delivery_request_fallback_success",
+                            order_id=order_id,
+                            delivery_location=delivery_location,
+                            status="success",
+                            message=f"Robot delivery successfully started for order {order_id} (fallback method)",
+                            call_chain=call_chain,
+                            response={
+                                "status_code": status_code,
+                                "body": response_body
+                            }
+                        )
+                        
                         print("FALLBACK ROBOT DELIVERY REQUEST SUCCESSFUL!")
                         print("="*80 + "\n")
                         return {
@@ -396,6 +578,20 @@ def send_robot_delivery_request(order_id, delivery_location):
                             "timestamp": datetime.now().isoformat()
                         }
                     else:
+                        # Log fallback error
+                        log_robot_api_activity(
+                            action="delivery_request_fallback_failed",
+                            order_id=order_id,
+                            delivery_location=delivery_location,
+                            status="error",
+                            message=f"Fallback robot API returned non-success code: {status_code}",
+                            call_chain=call_chain,
+                            response={
+                                "status_code": status_code,
+                                "body": response_body
+                            }
+                        )
+                        
                         print(f"FALLBACK ROBOT DELIVERY REQUEST FAILED! Status code: {status_code}")
                         print("="*80 + "\n")
                         return {
@@ -405,6 +601,17 @@ def send_robot_delivery_request(order_id, delivery_location):
                             "timestamp": datetime.now().isoformat()
                         }
             except Exception as fallback_err:
+                # Log fallback error
+                log_robot_api_activity(
+                    action="delivery_request_fallback_error",
+                    order_id=order_id,
+                    delivery_location=delivery_location,
+                    status="error",
+                    message="Fallback method also failed",
+                    call_chain=call_chain,
+                    exception=fallback_err
+                )
+                
                 print(f"FALLBACK METHOD ALSO FAILED: {str(fallback_err)}")
                 return {
                     "status": "error",
@@ -414,6 +621,17 @@ def send_robot_delivery_request(order_id, delivery_location):
                     "timestamp": datetime.now().isoformat()
                 }
     except Exception as e:
+        # Log unexpected error
+        log_robot_api_activity(
+            action="delivery_request_unexpected_error",
+            order_id=order_id,
+            delivery_location=delivery_location,
+            status="error",
+            message=f"Unexpected error: {str(e)}",
+            call_chain=call_chain,
+            exception=e
+        )
+        
         import traceback
         print(f"UNEXPECTED ERROR IN ROBOT DELIVERY REQUEST: {str(e)}")
         print("TRACEBACK:")
@@ -434,6 +652,20 @@ def check_robot_api_connection():
     Returns:
         bool: True if accessible, False otherwise
     """
+    # Get call chain information
+    import traceback
+    call_stack = traceback.extract_stack()
+    caller = call_stack[-2]
+    call_chain = f"{caller.filename.split('/')[-1]}:{caller.lineno} in {caller.name}"
+    
+    # Start activity log
+    log_robot_api_activity(
+        action="connection_check_start",
+        status="initiated",
+        message="Starting robot API connection check",
+        call_chain=call_chain
+    )
+    
     print("\n" + "="*80)
     print("ROBOT API CONNECTION CHECK STARTED")
     print(f"TIMESTAMP: {datetime.now().isoformat()}")
@@ -452,10 +684,28 @@ def check_robot_api_connection():
             )
             print(f"Robot API status endpoint response: {response.status_code}")
             if response.status_code == 200:
+                # Log success
+                log_robot_api_activity(
+                    action="connection_check_success",
+                    status="success",
+                    message="Robot API is accessible via status endpoint",
+                    call_chain=call_chain,
+                    response={"status_code": response.status_code}
+                )
+                
                 print("Robot API is accessible via status endpoint")
                 print("="*80 + "\n")
                 return True
         except Exception as e:
+            # Log status endpoint error
+            log_robot_api_activity(
+                action="connection_check_status_endpoint_error",
+                status="error",
+                message=f"Status endpoint error: {str(e)}",
+                call_chain=call_chain,
+                exception=e
+            )
+            
             print(f"Status endpoint error: {str(e)}")
             
         # If status endpoint fails, try the main URL
@@ -467,10 +717,28 @@ def check_robot_api_connection():
             )
             print(f"Robot API base URL response: {response.status_code}")
             if response.status_code == 200:
+                # Log base URL success
+                log_robot_api_activity(
+                    action="connection_check_base_url_success",
+                    status="success",
+                    message="Robot API base URL is accessible",
+                    call_chain=call_chain,
+                    response={"status_code": response.status_code}
+                )
+                
                 print("Robot API base URL is accessible")
                 print("="*80 + "\n")
                 return True
         except Exception as e:
+            # Log base URL error
+            log_robot_api_activity(
+                action="connection_check_base_url_error",
+                status="error",
+                message=f"Base URL error: {str(e)}",
+                call_chain=call_chain,
+                exception=e
+            )
+            
             print(f"Base URL error: {str(e)}")
             
         # If both fail, try a test delivery request
@@ -490,19 +758,47 @@ def check_robot_api_connection():
             print(f"Robot API test delivery response: {response.status_code}")
             
             result = response.status_code in (200, 201, 202, 400, 422)  # 400/422 could mean invalid data but API is up
+            
+            # Log test delivery result
+            log_robot_api_activity(
+                action="connection_check_test_delivery",
+                status="success" if result else "error",
+                message=f"Robot API connection via test delivery: {'SUCCESS' if result else 'FAILED'}",
+                call_chain=call_chain,
+                response={"status_code": response.status_code}
+            )
+            
             print(f"Robot API connection result: {'SUCCESS' if result else 'FAILED'}")
             print("="*80 + "\n")
             return result
         except Exception as e:
+            # Log test delivery error
+            log_robot_api_activity(
+                action="connection_check_test_delivery_error",
+                status="error",
+                message=f"Test delivery error: {str(e)}",
+                call_chain=call_chain,
+                exception=e
+            )
+            
             print(f"Test delivery error: {str(e)}")
             print("="*80 + "\n")
             return False
             
     except Exception as e:
+        # Log unexpected error
+        log_robot_api_activity(
+            action="connection_check_unexpected_error",
+            status="error",
+            message=f"Robot API connection check failed: {str(e)}",
+            call_chain=call_chain,
+            exception=e
+        )
+        
         print(f"Robot API connection check failed: {str(e)}")
         print("="*80 + "\n")
         return False
-
+    
 # ----- Order Management System -----
 
 class OrderManager:
@@ -1055,6 +1351,10 @@ class OrderManager:
                 }
                 
                 # Check if this order requires delivery (robot or standard)
+                # Add this code to the OrderManager.place_order method where it checks for robot delivery
+                # Around line 1240 in the original code
+
+                # Check if this order requires delivery (robot or standard)
                 print("\n" + "*"*80)
                 print("DELIVERY TYPE CHECK FOR ROBOT DELIVERY")
                 print(f"TIMESTAMP: {datetime.now().isoformat()}")
@@ -1062,6 +1362,15 @@ class OrderManager:
                 print(f"DELIVERY TYPE: '{order_data.get('delivery_type', 'None')}'")
                 print(f"DELIVERY LOCATION: '{order_data.get('delivery_location', 'None')}'")
                 print("*"*80)
+
+                # Log delivery check
+                log_robot_api_activity(
+                    action="order_delivery_check",
+                    order_id=order_data['id'],
+                    delivery_location=order_data.get('delivery_location', 'None'),
+                    status="check",
+                    message=f"Checking if order {order_data['id']} requires robot delivery, type: {order_data.get('delivery_type', 'None')}"
+                )
 
                 delivery_type_lower = str(order_data.get("delivery_type", "")).lower()
                 robot_delivery_requested = False
@@ -1076,6 +1385,15 @@ class OrderManager:
                 if any(term in delivery_type_lower for term in robot_delivery_terms):
                     robot_delivery_requested = True
                     print(f"ROBOT DELIVERY EXPLICITLY REQUESTED for order {order_data['id']}")
+                    
+                    # Log explicit robot delivery request
+                    log_robot_api_activity(
+                        action="order_robot_delivery_explicit_request",
+                        order_id=order_data['id'],
+                        delivery_location=order_data.get('delivery_location', ''),
+                        status="requested",
+                        message=f"Robot delivery explicitly requested for order {order_data['id']}"
+                    )
                     
                     # Attempt robot delivery
                     try:
@@ -1095,6 +1413,15 @@ class OrderManager:
                             order_data["robot_delivery"] = True
                             order_data["delivery_status"] = "in_progress"
                             
+                            # Log robot delivery success
+                            log_robot_api_activity(
+                                action="order_robot_delivery_success",
+                                order_id=order_data['id'],
+                                delivery_location=order_data.get('delivery_location', ''),
+                                status="success",
+                                message=f"Robot delivery successfully initiated for order {order_data['id']}"
+                            )
+                            
                             # Modify the response message to include robot delivery info
                             if "message" in order_response:
                                 order_response["message"] += "\n\nA robot has been dispatched to deliver your order. You can track the delivery status in the Delivery section."
@@ -1103,6 +1430,16 @@ class OrderManager:
                             # Robot delivery API call failed
                             error_msg = delivery_result.get("message", "Unknown error")
                             print(f"Robot delivery API call failed: {error_msg}")
+                            
+                            # Log robot delivery failure
+                            log_robot_api_activity(
+                                action="order_robot_delivery_failure",
+                                order_id=order_data['id'],
+                                delivery_location=order_data.get('delivery_location', ''),
+                                status="error",
+                                message=f"Robot delivery failed for order {order_data['id']}: {error_msg}"
+                            )
+                            
                             if "message" in order_response:
                                 order_response["message"] += "\n\nHowever, there was an issue with the robot delivery service. Our staff will handle your delivery manually."
                                 print("Added robot delivery failure message to response")
@@ -1110,6 +1447,17 @@ class OrderManager:
                         print(f"ERROR HANDLING ROBOT DELIVERY: {e}")
                         import traceback
                         traceback.print_exc()
+                        
+                        # Log robot delivery error
+                        log_robot_api_activity(
+                            action="order_robot_delivery_error",
+                            order_id=order_data['id'],
+                            delivery_location=order_data.get('delivery_location', ''),
+                            status="error",
+                            message=f"Exception during robot delivery for order {order_data['id']}: {str(e)}",
+                            exception=e
+                        )
+                        
                         if "message" in order_response:
                             order_response["message"] += "\n\nHowever, there was an issue with the robot delivery service. Our staff will handle your delivery manually."
                             print("Added robot delivery error message to response")
@@ -1117,6 +1465,15 @@ class OrderManager:
                 # If this is any type of delivery, use robot delivery
                 elif "delivery" in delivery_type_lower:
                     print(f"STANDARD DELIVERY REQUESTED, USING ROBOT DELIVERY AS DEFAULT")
+                    
+                    # Log standard delivery using robot
+                    log_robot_api_activity(
+                        action="order_standard_delivery_with_robot",
+                        order_id=order_data['id'],
+                        delivery_location=order_data.get('delivery_location', ''),
+                        status="requested",
+                        message=f"Using robot for standard delivery order {order_data['id']}"
+                    )
                     
                     # Use robot delivery for all delivery types
                     try:
@@ -1135,6 +1492,15 @@ class OrderManager:
                             order_data["robot_delivery"] = True
                             order_data["delivery_status"] = "in_progress"
                             
+                            # Log robot delivery success for standard delivery
+                            log_robot_api_activity(
+                                action="order_standard_delivery_robot_success",
+                                order_id=order_data['id'],
+                                delivery_location=order_data.get('delivery_location', ''),
+                                status="success",
+                                message=f"Robot delivery successfully initiated for standard delivery order {order_data['id']}"
+                            )
+                            
                             # Update the response message to include robot delivery info
                             if "message" in order_response:
                                 order_response["message"] += "\n\nA robot has been dispatched to deliver your order. You can track the delivery status in the Delivery section."
@@ -1143,6 +1509,16 @@ class OrderManager:
                             # Robot delivery API call failed for standard delivery
                             error_msg = delivery_result.get("message", "Unknown error")
                             print(f"Robot delivery API call failed for standard delivery: {error_msg}")
+                            
+                            # Log robot delivery failure for standard delivery
+                            log_robot_api_activity(
+                                action="order_standard_delivery_robot_failure",
+                                order_id=order_data['id'],
+                                delivery_location=order_data.get('delivery_location', ''),
+                                status="error",
+                                message=f"Robot delivery failed for standard delivery order {order_data['id']}: {error_msg}"
+                            )
+                            
                             if "message" in order_response:
                                 order_response["message"] += "\n\nDelivery will be handled by our staff."
                                 print("Added standard delivery message to response due to robot failure")
@@ -1150,11 +1526,30 @@ class OrderManager:
                         print(f"ERROR HANDLING ROBOT DELIVERY FOR STANDARD DELIVERY: {e}")
                         import traceback
                         traceback.print_exc()
+                        
+                        # Log robot delivery error for standard delivery
+                        log_robot_api_activity(
+                            action="order_standard_delivery_robot_error",
+                            order_id=order_data['id'],
+                            delivery_location=order_data.get('delivery_location', ''),
+                            status="error",
+                            message=f"Exception during robot delivery for standard delivery order {order_data['id']}: {str(e)}",
+                            exception=e
+                        )
+                        
                         if "message" in order_response:
                             order_response["message"] += "\n\nDelivery will be handled by our staff."
                             print("Added standard delivery message to response due to exception")
                 else:
                     print(f"NOT A DELIVERY ORDER. No robot delivery attempted for order type: {delivery_type_lower}")
+                    
+                    # Log no delivery needed
+                    log_robot_api_activity(
+                        action="order_no_delivery_needed",
+                        order_id=order_data['id'],
+                        status="skipped",
+                        message=f"No robot delivery needed for order {order_data['id']} of type {delivery_type_lower}"
+                    )
 
                 # Update the order data with robot delivery status for UI display
                 if "delivery" in delivery_type_lower:
@@ -2658,15 +3053,34 @@ def get_personalized_welcome(context):
 async def start():
     """Initialize chat session with persistent user data"""
     # Check robot API connection
+    # Add this to the @cl.on_chat_start function, where the robot API is initialized
+
+    # Check robot API connection
     try:
         print("\n" + "="*80)
         print("INITIALIZING ROBOT DELIVERY SYSTEM")
         print(f"TIMESTAMP: {datetime.now().isoformat()}")
         print("="*80)
         
+        # Log startup check
+        log_robot_api_activity(
+            action="robot_system_initialization",
+            status="initiated",
+            message="Starting robot delivery system initialization at chat start",
+            call_chain="on_chat_start"
+        )
+        
         robot_api_available = check_robot_api_connection()
         if robot_api_available:
             logger.debug("Robot API is accessible")
+            
+            # Log available status
+            log_robot_api_activity(
+                action="robot_system_available",
+                status="success",
+                message="Robot API is accessible during startup",
+                call_chain="on_chat_start"
+            )
             
             # Try a test API call
             test_result = send_robot_delivery_request(
@@ -2677,9 +3091,28 @@ async def start():
             print(f"ROBOT API INITIALIZATION RESULT: {'SUCCESS' if test_result.get('status') == 'success' else 'FAILED'}")
             print(f"ROBOT API STATUS: {test_result.get('status', 'unknown')}")
             print(f"ROBOT API MESSAGE: {test_result.get('message', 'None')}")
+            
+            # Log test result
+            log_robot_api_activity(
+                action="robot_system_test_call",
+                order_id="STARTUP-TEST",
+                delivery_location="API Verification Test",
+                status=test_result.get('status', 'unknown'),
+                message=f"Startup test call result: {test_result.get('message', 'None')}",
+                call_chain="on_chat_start",
+                response=test_result
+            )
         else:
             logger.warning("Warning: Robot API is not accessible")
             print("ROBOT API INITIALIZATION: FAILED - API not accessible")
+            
+            # Log not available status
+            log_robot_api_activity(
+                action="robot_system_unavailable",
+                status="error",
+                message="Robot API is not accessible during startup",
+                call_chain="on_chat_start"
+            )
         
         print("="*80 + "\n")
     except Exception as e:
@@ -2688,6 +3121,15 @@ async def start():
         logger.error(traceback.format_exc())
         print(f"ROBOT API INITIALIZATION ERROR: {str(e)}")
         print("="*80 + "\n")
+        
+        # Log initialization error
+        log_robot_api_activity(
+            action="robot_system_initialization_error",
+            status="error",
+            message=f"Error during robot system initialization: {str(e)}",
+            call_chain="on_chat_start",
+            exception=e
+        )
     
     # Get URL query parameters
     try:
@@ -4334,6 +4776,19 @@ def handle_robot_delivery_request(order_info_str):
     Returns:
         str: Result of the delivery request
     """
+    # Get call chain information
+    import traceback
+    call_stack = traceback.extract_stack()
+    caller = call_stack[-2]
+    call_chain = f"{caller.filename.split('/')[-1]}:{caller.lineno} in {caller.name}"
+    
+    # Start activity log
+    log_robot_api_activity(
+        action="handle_robot_delivery_start",
+        message="Starting robot delivery handler",
+        call_chain=call_chain
+    )
+    
     print("\n" + "="*50)
     print("HANDLE ROBOT DELIVERY REQUEST FUNCTION CALLED")
     print(f"INPUT: {order_info_str}")
@@ -4360,6 +4815,14 @@ def handle_robot_delivery_request(order_info_str):
                 elif '"delivery_location"' in order_info_str:
                     delivery_location = order_info_str['"delivery_location"']
                 
+            log_robot_api_activity(
+                action="handle_robot_delivery_extract_dict",
+                order_id=order_id,
+                delivery_location=delivery_location,
+                status="info",
+                message="Extracted order data from dictionary input",
+                call_chain=call_chain
+            )
             print(f"Extracted from dictionary: order_id={order_id}, location={delivery_location}")
         
         # Handle string input - try to parse as JSON
@@ -4375,9 +4838,25 @@ def handle_robot_delivery_request(order_info_str):
                 order_info = json.loads(order_info_str)
                 order_id = order_info.get("order_id")
                 delivery_location = order_info.get("delivery_location")
+                
+                log_robot_api_activity(
+                    action="handle_robot_delivery_parse_json",
+                    order_id=order_id,
+                    delivery_location=delivery_location,
+                    status="success",
+                    message="Successfully parsed input as JSON",
+                    call_chain=call_chain
+                )
                 print(f"Successfully parsed as JSON: {order_info}")
             except json.JSONDecodeError:
+                log_robot_api_activity(
+                    action="handle_robot_delivery_parse_json_failed",
+                    status="warning",
+                    message="Input is not valid JSON, trying to extract order information from text",
+                    call_chain=call_chain
+                )
                 print("Input is not valid JSON, trying to extract order information from text")
+                
                 # Handle the case where input might be just an order ID
                 if order_info_str.strip().upper().startswith("ORD-") or order_info_str.strip().isalnum():
                     order_id = order_info_str.strip()
@@ -4389,6 +4868,15 @@ def handle_robot_delivery_request(order_info_str):
                     else:
                         # Use default location if not found
                         delivery_location = "Default Location"
+                    
+                    log_robot_api_activity(
+                        action="handle_robot_delivery_extract_direct_order_id",
+                        order_id=order_id,
+                        delivery_location=delivery_location,
+                        status="info",
+                        message="Using direct order ID from input",
+                        call_chain=call_chain
+                    )
                     print(f"Using order_id directly: {order_id}, location: {delivery_location}")
                 else:
                     # Try to extract order ID and location from text
@@ -4409,9 +4897,26 @@ def handle_robot_delivery_request(order_info_str):
                     if not delivery_location:
                         delivery_location = "Default Location"
                         print(f"Using default delivery location: {delivery_location}")
+                    
+                    log_robot_api_activity(
+                        action="handle_robot_delivery_extract_text",
+                        order_id=order_id,
+                        delivery_location=delivery_location,
+                        status="info",
+                        message="Extracted order data from text input",
+                        call_chain=call_chain
+                    )
         
         # Validate required fields
         if not order_id:
+            # Log validation error
+            log_robot_api_activity(
+                action="handle_robot_delivery_validation_error",
+                status="error",
+                message="Missing order ID",
+                call_chain=call_chain
+            )
+            
             print("Error: Missing order ID")
             return "Error: Order ID is required for robot delivery."
         
@@ -4439,8 +4944,24 @@ def handle_robot_delivery_request(order_info_str):
                         ('out for delivery', order_id))
                 conn.commit()
                 conn.close()
+                
+                log_robot_api_activity(
+                    action="handle_robot_delivery_db_update",
+                    order_id=order_id,
+                    status="success",
+                    message=f"Updated order {order_id} status to 'out for delivery' in database",
+                    call_chain=call_chain
+                )
                 print(f"Updated order {order_id} status to 'out for delivery' in database")
             except Exception as db_err:
+                log_robot_api_activity(
+                    action="handle_robot_delivery_db_update_error",
+                    order_id=order_id,
+                    status="error",
+                    message=f"Database error: {str(db_err)}",
+                    call_chain=call_chain,
+                    exception=db_err
+                )
                 print(f"Database error while updating order status: {db_err}")
             
             # Update UI
@@ -4462,26 +4983,190 @@ def handle_robot_delivery_request(order_info_str):
                     cl.user_session.set("context", context)
                     print("Updated active order in context with robot delivery status")
                 
+                log_robot_api_activity(
+                    action="handle_robot_delivery_ui_update",
+                    order_id=order_id,
+                    delivery_location=delivery_location,
+                    status="success",
+                    message="Successfully updated UI with robot delivery status",
+                    call_chain=call_chain
+                )
                 print("Successfully updated UI with robot delivery status")
             except Exception as ui_err:
+                log_robot_api_activity(
+                    action="handle_robot_delivery_ui_update_error",
+                    order_id=order_id,
+                    status="error",
+                    message=f"Error updating UI: {str(ui_err)}",
+                    call_chain=call_chain,
+                    exception=ui_err
+                )
                 print(f"Error updating UI with robot status: {ui_err}")
             
+            log_robot_api_activity(
+                action="handle_robot_delivery_complete",
+                order_id=order_id,
+                delivery_location=delivery_location,
+                status="success",
+                message="Robot delivery handler completed successfully",
+                call_chain=call_chain
+            )
             print("Returning success message to user")
             print("="*50 + "\n")
             return f"🤖 Robot delivery has been dispatched for order {order_id} to {delivery_location}. The robot is on its way!"
         else:
             error_msg = result.get("message", "Unknown error")
+            
+            log_robot_api_activity(
+                action="handle_robot_delivery_api_failed",
+                order_id=order_id,
+                delivery_location=delivery_location,
+                status="error",
+                message=f"Robot delivery API call failed: {error_msg}",
+                call_chain=call_chain,
+                response=result
+            )
             print(f"Robot delivery API call failed: {error_msg}")
             print("="*50 + "\n")
             return f"Sorry, there was a problem starting the robot delivery: {error_msg}. Our staff will handle the delivery manually."
     
     except Exception as e:
         import traceback
+        
+        log_robot_api_activity(
+            action="handle_robot_delivery_unexpected_error",
+            status="error",
+            message=f"Unexpected error: {str(e)}",
+            call_chain=call_chain,
+            exception=e
+        )
         print(f"Unexpected error in handle_robot_delivery_request: {e}")
         print("TRACEBACK:")
         print(traceback.format_exc())
         print("="*50 + "\n")
         return f"An error occurred while processing the robot delivery request: {str(e)}. Our staff will handle your delivery manually."
+
+
+def request_robot_delivery(order_info_str):
+    """
+    Request robot delivery for an order with enhanced input handling and logging
+    
+    Args:
+        order_info_str (str): Either a JSON string, a plain order ID, or a text description
+            
+    Returns:
+        str: Result message
+    """
+    # Get call chain information
+    import traceback
+    call_stack = traceback.extract_stack()
+    caller = call_stack[-2]
+    call_chain = f"{caller.filename.split('/')[-1]}:{caller.lineno} in {caller.name}"
+    
+    # Start activity log
+    log_robot_api_activity(
+        action="request_robot_delivery_start",
+        message="Starting robot delivery request",
+        call_chain=call_chain
+    )
+    
+    print("\n" + "+"*80)
+    print("ROBOT DELIVERY REQUEST FUNCTION CALLED")
+    print(f"TIMESTAMP: {datetime.now().isoformat()}")
+    print(f"INPUT: {order_info_str}")
+    print("+"*80)
+    
+    try:
+        # Handle different input formats
+        order_id = None
+        delivery_location = None
+        
+        # Process input similar to handle_robot_delivery_request function...
+        # (Same input processing logic as above)
+        
+        # Validate required fields
+        if not order_id:
+            # Log validation error
+            log_robot_api_activity(
+                action="request_robot_delivery_validation_error",
+                status="error",
+                message="Missing order ID",
+                call_chain=call_chain
+            )
+            
+            print("Error: Missing order ID")
+            return "Error: Order ID is required for robot delivery"
+        
+        if not delivery_location:
+            # Log validation error
+            log_robot_api_activity(
+                action="request_robot_delivery_validation_error",
+                status="error",
+                message="Missing delivery location",
+                call_chain=call_chain
+            )
+            
+            print("Error: Missing delivery location")
+            return "Error: Delivery location is required for robot delivery"
+            
+        # Format order ID if needed
+        if not order_id.upper().startswith("ORD-"):
+            order_id = f"ORD-{order_id}".upper()
+            print(f"Reformatted order ID to: {order_id}")
+        else:
+            order_id = order_id.upper()
+            
+        # Call our consolidated robot delivery function
+        print(f"Calling robot delivery API for order {order_id} to {delivery_location}")
+        result = send_robot_delivery_request(order_id, delivery_location)
+        print(f"Robot API call result: {result}")
+        
+        # Process results and update status...
+        # (Similar to handle_robot_delivery_request)
+        
+        if result.get("status") == "success":
+            log_robot_api_activity(
+                action="request_robot_delivery_complete",
+                order_id=order_id,
+                delivery_location=delivery_location,
+                status="success",
+                message="Robot delivery request completed successfully",
+                call_chain=call_chain
+            )
+            return f"🤖 Robot delivery has been dispatched for order {order_id} to {delivery_location}. The robot is on its way!"
+        else:
+            error_message = result.get("message", "Unknown error")
+            
+            log_robot_api_activity(
+                action="request_robot_delivery_api_failed",
+                order_id=order_id,
+                delivery_location=delivery_location,
+                status="error",
+                message=f"Robot delivery API call failed: {error_message}",
+                call_chain=call_chain,
+                response=result
+            )
+            
+            print(f"Robot delivery API call failed: {error_message}")
+            print("+"*80 + "\n")
+            return f"Sorry, there was a problem starting the robot delivery: {error_message}. Our staff will handle the delivery manually."
+    except Exception as e:
+        import traceback
+        
+        log_robot_api_activity(
+            action="request_robot_delivery_unexpected_error",
+            status="error",
+            message=f"Unexpected error: {str(e)}",
+            call_chain=call_chain,
+            exception=e
+        )
+        
+        print(f"Unexpected error in request_robot_delivery: {e}")
+        print("TRACEBACK:")
+        print(traceback.format_exc())
+        print("+"*80 + "\n")
+        return f"Error requesting robot delivery: {str(e)}. Our staff will handle your delivery manually."
+    
     
 def request_robot_delivery(order_info_str):
     """

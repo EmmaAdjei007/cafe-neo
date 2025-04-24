@@ -22,7 +22,7 @@ config = {
     
     # API URLs
     "chainlit_url": os.environ.get('CHAINLIT_URL', 'http://localhost:8000'),
-    "robot_simulator_url": os.environ.get('ROBOT_SIMULATOR_URL', 'http://localhost:8051'),
+    "robot_simulator_url": os.environ.get('ROBOT_SIMULATOR_URL', 'http://localhost:8001'),
     
     # Database settings
     "data_dir": os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'),
